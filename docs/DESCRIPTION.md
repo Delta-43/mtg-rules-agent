@@ -9,7 +9,12 @@ what's next; `docs/PUBLISHING_PLAN.md` covers the dual-product (self-hosted
 `webapp/`, `ops/`, `shared/`, and `server/rules_mcp/`/`server/scryfall_mcp/`/
 `server/accounts_db/` within it) has its own README for day-to-day work
 inside that piece — this file is the cross-cutting picture that ties them
-together, not a duplicate of any of them.
+together, not a duplicate of any of them. Each of the five top-level
+modules also has a `STATUS.md` alongside its README — a short,
+consistently-structured snapshot (project-wide summary, this module's
+current status/features, what's left to do) meant for a developer who
+just wants "where does this stand right now," without reading the full
+`docs/PLAN.md`/`docs/TODO.md` history.
 
 ---
 
@@ -87,7 +92,7 @@ See the root `README.md` for the same picture as a Mermaid diagram.
 Reorganized (September 2026) into four top-level modules plus `shared/` —
 see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
 
-- **`server/`** — the backend product:
+- **`server/`** — the backend product (status: [`server/STATUS.md`](../server/STATUS.md)):
   - `app_api/` — FastAPI app lifecycle, HTTP endpoints, CORS, API-key
     auth, rate limiting, aggregate health check across the MCP servers.
   - `llm_agent/` — the tool-calling agent (`agent.py`), the pluggable LLM
@@ -109,15 +114,18 @@ see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
   - `searxng/` — config for the self-hosted metasearch instance backing
     `web_search`.
   - `tests/` — pytest suite covering `app_api`'s routes.
-- **`discord_client/`** — thin `discord.py` client calling the public
+- **`discord_client/`** (status: [`STATUS.md`](../discord_client/STATUS.md))
+  — thin `discord.py` client calling the public
   `/chat` API. Named `discord_client`, not `discord`, deliberately — a
   bare `discord/` directory at the repo root would shadow the real
   `discord.py` library on any host-run invocation.
-- **`webapp/`** — React + Vite PWA, built into the `caddy` image and
-  served same-origin with the API.
-- **`ops/`** — R2 backup/restore scripts with their own lightweight image
-  (no LangChain dependency); future home for monitoring/alerting config.
-- **`shared/`** — cross-module committed source assets (brand art, design
+- **`webapp/`** (status: [`STATUS.md`](../webapp/STATUS.md)) — React +
+  Vite PWA, built into the `caddy` image and served same-origin with the API.
+- **`ops/`** (status: [`STATUS.md`](../ops/STATUS.md)) — R2 backup/restore
+  scripts with their own lightweight image (no LangChain dependency);
+  future home for monitoring/alerting config.
+- **`shared/`** (status: [`STATUS.md`](../shared/STATUS.md)) —
+  cross-module committed source assets (brand art, design
   reference) — deliberately not inside `data/`, which is gitignored
   runtime state with nothing in common with these.
 
@@ -269,7 +277,8 @@ Discord message edits fights Discord's own edit rate limits). Renders
 mana symbols as real Discord application emojis and tables as branded
 embeds. Full detail in
 [`discord_client/README.md`](../discord_client/README.md) and `CLAUDE.md`'s
-Discord bot section.
+Discord bot section; current status in
+[`discord_client/STATUS.md`](../discord_client/STATUS.md).
 
 ### 5.7 Web app (`webapp/`)
 
@@ -277,7 +286,8 @@ React + Vite PWA, SSE streaming chat UI, `conversation_id` persisted
 client-side for multi-turn continuity. Same-origin deploy by default (no
 CORS needed). Full detail in
 [`webapp/README.md`](../webapp/README.md); the in-progress visual redesign
-is tracked in `docs/WEBAPP_PLAN.md`.
+is tracked in `docs/WEBAPP_PLAN.md`; current status in
+[`webapp/STATUS.md`](../webapp/STATUS.md).
 
 ---
 
@@ -407,14 +417,14 @@ quota on top of the existing per-minute rate limit. `query` is capped at
 
 ```
 mtg_local_chatbot/
-├── server/                   # Backend product -- see server/README.md
+├── server/                   # Backend product -- see server/README.md + STATUS.md
 │   ├── app_api/ llm_agent/ core_config/ accounts_db/
 │   ├── rules_mcp/ scryfall_mcp/ searxng/ tests/
 │   └── Dockerfile requirements.txt project_config.yml
-├── discord_client/           # discord.py bot client -- see discord_client/README.md
-├── webapp/                   # React + Vite PWA -- see webapp/README.md
-├── ops/                       # R2 backup/restore + future monitoring -- see ops/README.md
-├── shared/                    # Cross-module source assets -- see shared/README.md
+├── discord_client/           # discord.py bot client -- see discord_client/README.md + STATUS.md
+├── webapp/                   # React + Vite PWA -- see webapp/README.md + STATUS.md
+├── ops/                       # R2 backup/restore + future monitoring -- see ops/README.md + STATUS.md
+├── shared/                    # Cross-module source assets -- see shared/README.md + STATUS.md
 ├── docs/                      # This file, FEATURES.md, PLAN.md, TODO.md, PUBLISHING_PLAN.md, WEBAPP_PLAN.md
 ├── data/                      # Runtime state only (gitignored)
 ├── setup.sh run_bot.sh stop_bot.sh

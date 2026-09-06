@@ -83,9 +83,10 @@ Every box above is a real, independently-runnable module — `webapp/`,
 
 | Component | Status | Detail |
 |---|:---:|---|
-| Backend (agent, API, rules & card search) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`server/`](server/README.md) |
-| Web App (PWA) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`webapp/`](webapp/README.md) · [visual redesign in progress](docs/WEBAPP_PLAN.md) |
-| Discord Bot ("Azor, High Arbiter") | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`discord_client/`](discord_client/README.md) |
+| Backend (agent, API, rules & card search) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`server/`](server/README.md) · [status](server/STATUS.md) |
+| Web App (PWA) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`webapp/`](webapp/README.md) · [status](webapp/STATUS.md) · [redesign plan](docs/WEBAPP_PLAN.md) |
+| Discord Bot ("Azor, High Arbiter") | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`discord_client/`](discord_client/README.md) · [status](discord_client/STATUS.md) |
+| Ops (backup/restore, monitoring) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`ops/`](ops/README.md) · [status](ops/STATUS.md) |
 | Public Hosted Instance | ![Live](https://img.shields.io/badge/-Live-brightgreen) | `azor.delta43.net` |
 | Accounts, Tiers & Billing | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PLAN.md) |
 | CI/CD | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PUBLISHING_PLAN.md) |
@@ -174,10 +175,11 @@ mtg_local_chatbot/
 └── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts)
 ```
 
-Every module has its own README with setup/run detail for that piece
-specifically — start there when working on a particular surface; start
-with [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full
-cross-cutting picture.
+Every module has its own `README.md` (setup/run detail) and `STATUS.md`
+(current status, features, what's left) — start there when working on a
+particular surface; start with
+[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full cross-cutting
+picture.
 
 ## 📚 Documentation
 
@@ -190,7 +192,8 @@ cross-cutting picture.
 | [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md) | Self-hosted OSS + hosted SaaS publishing strategy |
 | [`docs/WEBAPP_PLAN.md`](docs/WEBAPP_PLAN.md) | In-progress PWA visual redesign |
 | [`CLAUDE.md`](CLAUDE.md) | Deep implementation notes — the non-obvious "why" behind the code |
-| [`server/README.md`](server/README.md), [`discord_client/README.md`](discord_client/README.md), [`webapp/README.md`](webapp/README.md), [`ops/README.md`](ops/README.md), [`shared/README.md`](shared/README.md) | Per-module setup & run instructions |
+| `server/`, `discord_client/`, `webapp/`, `ops/`, `shared/` — `README.md` | Per-module setup & run instructions |
+| `server/`, `discord_client/`, `webapp/`, `ops/`, `shared/` — `STATUS.md` | Per-module current status, features, and what's left — see [`server/STATUS.md`](server/STATUS.md) for the pattern |
 
 ## 🤝 Contributing
 

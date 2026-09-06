@@ -7,6 +7,8 @@ MCP sub-services it talks to. This is the "server" module in the
 things; this file is just the orientation a new contributor to *this*
 module needs, and doesn't duplicate that.
 
+**Current status and what's left to do:** see [`STATUS.md`](STATUS.md).
+
 ## Layout
 
 - `app_api/` — FastAPI app, HTTP routes (`/chat`, `/chat/stream`,

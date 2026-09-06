@@ -15,6 +15,18 @@ tool result, it's instructed to say so rather than guess.
 This file is oriented toward things that aren't obvious from reading one file at
 a time.
 
+Each top-level module (`server/`, `discord_client/`, `webapp/`, `ops/`,
+`shared/`) has a `STATUS.md` alongside its `README.md` — a short,
+consistently-structured snapshot (project-wide summary, that module's
+current status/features, what's left to do), meant for a developer who
+wants "where does this stand right now" without reading `docs/PLAN.md`/
+`docs/TODO.md`'s full history. **Update the relevant module's `STATUS.md`
+whenever a change meaningfully shifts what's true there** (a feature
+lands, something moves from planned to live, a new gap is found) — it's
+easy for these to silently go stale the way `docs/PLAN.md`'s "Frontend
+visual design pass" line once did (see git history), and they exist
+specifically so that doesn't happen quietly.
+
 ## Commands
 
 ```bash
