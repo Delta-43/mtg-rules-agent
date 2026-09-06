@@ -73,6 +73,10 @@ for entry in "rules-mcp:http://localhost:8100/health:600" "scryfall-mcp:http://l
   fi
 done
 
+# PYTHONPATH=server, not `cd server` -- see setup.sh's comment on the same
+# pattern: keeps cwd-relative config defaults (data/conversations/...)
+# pointed at the real repo-root data/ directory.
+export PYTHONPATH="server${PYTHONPATH:+:${PYTHONPATH}}"
 APP_HOST="$("${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.HOST)')"
 APP_PORT="$("${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.PORT)')"
 

@@ -4,10 +4,10 @@ networks:
 
 services:
   mtg-judge:
-    build: .
+    build: ./server
     container_name: mtg-judge-chatbot
     volumes:
-      - ./project_config.yml:/app/project_config.yml:ro
+      - ./server/project_config.yml:/app/project_config.yml:ro
       - ./data/conversations:/app/data/conversations
     environment:
       - PROJECT_CONFIG_FILE=/app/project_config.yml
@@ -71,7 +71,7 @@ services:
           memory: 1G
 
   rules-mcp:
-    build: ./rules_mcp
+    build: ./server/rules_mcp
     container_name: mtg-rules-mcp
     ports:
       # Loopback-only: lets a host-run backend (run_bot.sh) reach it directly
@@ -109,7 +109,7 @@ services:
     restart: unless-stopped
 
   scryfall-mcp:
-    build: ./scryfall_mcp
+    build: ./server/scryfall_mcp
     container_name: mtg-scryfall-mcp
     ports:
       - "127.0.0.1:3000:3000"
@@ -127,7 +127,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./server/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
     cap_drop:
@@ -143,7 +143,7 @@ services:
   caddy:
     build:
       context: .
-      dockerfile: frontend/Dockerfile
+      dockerfile: webapp/Dockerfile
       args:
         # Same-origin deploy (default): Caddy serves the built PWA and
         # proxies /chat*, /health on the same domain, so the API base is
@@ -165,7 +165,7 @@ services:
 
   # Opt-in: `docker-compose --profile tunnel up`. Connects this deployment to
   # a Cloudflare Tunnel so it's reachable at your domain (e.g.
-  # oracle.delta43.net) with TLS terminated at Cloudflare's edge -- no public
+  # azor.delta43.net) with TLS terminated at Cloudflare's edge -- no public
   # port needs to be open on the host at all. Create the tunnel in the
   # Cloudflare Zero Trust dashboard, point its public hostname at
   # `http://localhost:80` (host networking, see below -- matches this
@@ -197,17 +197,18 @@ services:
   # Opt-in: `docker-compose --profile backup up`. Periodically snapshots
   # conversation memory + the rules ChromaDB index to Cloudflare R2 (an
   # S3-compatible bucket) so state survives a VPS rebuild/redeploy. No-ops
-  # (logs and exits) if R2_* credentials aren't set -- see scripts/backup_to_r2.py.
+  # (logs and exits) if R2_* credentials aren't set -- see ops/README.md and
+  # ops/backup_to_r2.py. Builds from ops/ (its own small boto3-only image),
+  # not the main backend image -- this service has zero application imports.
   r2-backup:
-    build: .
+    build: ./ops
     container_name: mtg-r2-backup
-    command: python -m scripts.backup_to_r2 --loop
     volumes:
       - ./data/conversations:/app/data/conversations:ro
       - ./data/chroma:/app/data/chroma:ro
     environment:
       # Not `:?`-required (see the `tunnel` service's comment above) --
-      # scripts/backup_to_r2.py already no-ops with a clear log line if these
+      # ops/backup_to_r2.py already no-ops with a clear log line if these
       # are unset, which is the right place to enforce this, not compose-parse
       # time.
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
@@ -221,6 +222,101 @@ services:
     profiles:
       - backup
 
+  # Opt-in: `docker-compose --profile discord up`. Deliberately points at the
+  # public API_BASE_URL (azor.delta43.net), not an internal service name --
+  # this bot is meant to work the same way whether it's colocated on this
+  # host or run elsewhere entirely, and shouldn't depend on Docker-internal
+  # DNS. For that reason it's also NOT attached to mtg-network -- it only
+  # ever needs outbound internet access to Discord's gateway and to the
+  # public API, same as any other client. See discord_client/README.md.
+  discord-bot:
+    build: ./discord_client
+    container_name: mtg-discord-bot
+    environment:
+      # Not `:?`-required (see the `tunnel` service's comment above) --
+      # compose interpolates every service's env at parse time regardless of
+      # active --profile flags, so a hard requirement here would break plain
+      # `docker-compose up` for everyone not using the discord profile.
+      # bot.py's own main() already fails fast with a clear error if this is
+      # empty when the container actually starts.
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - API_BASE_URL=${DISCORD_API_BASE_URL:-https://azor.delta43.net}
+      # Dedicated key (not shared with anything else) so this bot's usage is
+      # tracked against its own daily quota -- see root CLAUDE.md/TODO.md.
+      - API_KEY=${DISCORD_API_KEY:-}
+      - ALLOWED_GUILD_IDS=${DISCORD_ALLOWED_GUILD_IDS:-}
+      - ALLOWED_CHANNEL_IDS=${DISCORD_ALLOWED_CHANNEL_IDS:-}
+      - COOLDOWN_SECONDS=${DISCORD_COOLDOWN_SECONDS:-10}
+    restart: unless-stopped
+    profiles:
+      - discord
+
+  # Opt-in: `docker-compose --profile accounts up`. Scaffolding for the
+  # future accounts/tiers/billing pivot (see PLAN.md, accounts_db/README.md)
+  # -- self-hosted Supabase, trimmed to just these two containers.
+  # Deliberately NOT running PostgREST/Realtime/Storage/Kong/Studio/
+  # analytics from the official bundle -- FastAPI talks to Postgres
+  # directly (accounts_db/) and verifies GoTrue-issued JWTs locally, so
+  # none of Supabase's REST/gateway layer is needed. Not added to
+  # `mtg-judge`'s `depends_on`, and nothing here is forwarded into
+  # `mtg-judge`'s environment yet -- that's Phase 1 work, once
+  # ACCOUNTS_MODE=hosted is something the backend actually branches on.
+  supabase-db:
+    image: supabase/postgres:17.6.1.136
+    container_name: mtg-supabase-db
+    environment:
+      # Not `:?`-required (see the `tunnel` service's comment above) --
+      # the image itself fails fast with its own clear error on an empty
+      # required value at container start, same reasoning as
+      # DISCORD_BOT_TOKEN/CLOUDFLARE_TUNNEL_TOKEN.
+      - POSTGRES_USER=${POSTGRES_USER:-}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_DB=${POSTGRES_DB:-}
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - mtg-network
+    restart: unless-stopped
+    profiles:
+      - accounts
+
+  supabase-auth:
+    image: supabase/gotrue:v2.189.0
+    container_name: mtg-supabase-auth
+    environment:
+      - GOTRUE_API_HOST=0.0.0.0
+      - GOTRUE_API_PORT=9999
+      - GOTRUE_DB_DRIVER=postgres
+      - GOTRUE_DB_DATABASE_URL=${GOTRUE_DB_DATABASE_URL:-}
+      - GOTRUE_SITE_URL=${GOTRUE_SITE_URL:-https://azor.delta43.net}
+      - GOTRUE_JWT_SECRET=${GOTRUE_JWT_SECRET:-}
+      - GOTRUE_JWT_EXP=3600
+      - GOTRUE_DISABLE_SIGNUP=false
+      # OAuth-only login (no self-hosted password storage/reset flow) --
+      # see PLAN.md's auth decision.
+      - GOTRUE_EXTERNAL_EMAIL_ENABLED=false
+      - GOTRUE_EXTERNAL_GOOGLE_ENABLED=${OAUTH_GOOGLE_CLIENT_ID:+true}
+      - GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID=${OAUTH_GOOGLE_CLIENT_ID:-}
+      - GOTRUE_EXTERNAL_GOOGLE_SECRET=${OAUTH_GOOGLE_CLIENT_SECRET:-}
+      - GOTRUE_EXTERNAL_DISCORD_ENABLED=${OAUTH_DISCORD_CLIENT_ID:+true}
+      - GOTRUE_EXTERNAL_DISCORD_CLIENT_ID=${OAUTH_DISCORD_CLIENT_ID:-}
+      - GOTRUE_EXTERNAL_DISCORD_SECRET=${OAUTH_DISCORD_CLIENT_SECRET:-}
+      - GOTRUE_EXTERNAL_GITHUB_ENABLED=${OAUTH_GITHUB_CLIENT_ID:+true}
+      - GOTRUE_EXTERNAL_GITHUB_CLIENT_ID=${OAUTH_GITHUB_CLIENT_ID:-}
+      - GOTRUE_EXTERNAL_GITHUB_SECRET=${OAUTH_GITHUB_CLIENT_SECRET:-}
+    ports:
+      - "127.0.0.1:9999:9999"
+    depends_on:
+      - supabase-db
+    networks:
+      - mtg-network
+    restart: unless-stopped
+    profiles:
+      - accounts
+
 volumes:
   caddy_data:
   caddy_config:
+  supabase_db_data:

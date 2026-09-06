@@ -1,0 +1,32 @@
+# Maps directories to reviewers, matching the server/discord_client/webapp/ops
+# module split (see PUBLISHING_PLAN.md). GitHub auto-requests these owners as
+# reviewers on any PR touching a matching path; the LAST matching pattern
+# wins, so more specific paths belong below more general ones.
+#
+# Replace the placeholder @usernames below with real GitHub usernames before
+# this has any effect -- CODEOWNERS entries that don't resolve to a real user
+# (or a team the repo owner belongs to) are silently ignored, not an error.
+
+# Default: repo owner reviews anything not claimed by a more specific rule below.
+*                       @Delta-43
+
+# Backend product (agent, API, rules/scryfall MCP servers).
+/server/                @Delta-43 @dev-tester-1 @dev-tester-2
+
+# Discord bot client.
+/discord_client/        @Delta-43 @dev-tester-1 @dev-tester-2
+
+# PWA frontend.
+/webapp/                @Delta-43 @dev-tester-1 @dev-tester-2
+
+# Backup/restore + future monitoring config -- the reliability/monitoring owner.
+/ops/                   @Delta-43 @reliability-owner
+
+# Deployment/orchestration files -- monitoring/reliability should see these too,
+# since uptime/alerting config and compose changes are tightly coupled.
+/docker-compose.yml     @Delta-43 @reliability-owner
+/docker-compose.override.yml  @Delta-43 @reliability-owner
+/Caddyfile              @Delta-43 @reliability-owner
+
+# CI workflows, once they exist (see PUBLISHING_PLAN.md Stage 0).
+/.github/               @Delta-43 @reliability-owner

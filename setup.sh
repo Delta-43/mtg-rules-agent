@@ -13,11 +13,11 @@ fi
 
 echo "Step 2: Installing dependencies..."
 "${VENV_DIR}/bin/pip" install --upgrade pip
-"${VENV_DIR}/bin/pip" install -r requirements.txt
+"${VENV_DIR}/bin/pip" install -r server/requirements.txt
 
-echo "Step 3: Verifying prerequisites and project_config.yml..."
-if [[ ! -f project_config.yml ]]; then
-    echo "Missing project_config.yml. Restore it before running setup."
+echo "Step 3: Verifying prerequisites and server/project_config.yml..."
+if [[ ! -f server/project_config.yml ]]; then
+    echo "Missing server/project_config.yml. Restore it before running setup."
     exit 1
 fi
 if ! command -v ollama >/dev/null 2>&1; then
@@ -46,8 +46,12 @@ else
     fi
 fi
 
-LLM_MODEL="$("${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.LLM_MODEL)')"
-EMBED_MODEL="$("${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.EMBEDDING_MODEL)')"
+# PYTHONPATH=server, not `cd server` -- core_config/app_api resolve as
+# top-level packages either way, but staying at repo root keeps cwd-relative
+# defaults (e.g. CONVERSATION_DB_PATH's "data/conversations/...") pointed at
+# the real data/ directory, which lives at the repo root, not inside server/.
+LLM_MODEL="$(PYTHONPATH=server "${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.LLM_MODEL)')"
+EMBED_MODEL="$(PYTHONPATH=server "${VENV_DIR}/bin/python" -c 'from core_config import Config; print(Config.EMBEDDING_MODEL)')"
 
 echo "Step 5: Pulling configured Ollama models..."
 OLLAMA_HOST="${OLLAMA_URL#http://}" ollama pull "${LLM_MODEL}"
