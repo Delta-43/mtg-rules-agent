@@ -45,6 +45,12 @@ when it was unmodified third-party code not worth touching, it's now a local
 fork this repo actively modifies (see the Scryfall section below), so new
 tools added there should get a matching test.
 
+**Both are wired into CI now** (`.github/workflows/server-ci.yml`,
+`scryfall-mcp-ci.yml`), one workflow per module plus a package-wide one
+(`compose-validate.yml`) -- see `docs/PUBLISHING_PLAN.md`'s Stage 0 for
+the full list and what's still genuinely uncovered (`rules_mcp` still has
+no fixture-based correctness test, only an import smoke test).
+
 Full Docker deployment (all five services incl. Caddy):
 ```bash
 docker-compose up --build

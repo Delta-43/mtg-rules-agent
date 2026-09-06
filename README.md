@@ -21,7 +21,15 @@
   <img src="https://img.shields.io/badge/Discord%20Bot-Live-brightgreen" alt="Discord Bot: Live">
   <img src="https://img.shields.io/badge/Web%20App-Live-brightgreen" alt="Web App: Live">
   <img src="https://img.shields.io/badge/Accounts%20%26%20Billing-Planned-lightgrey" alt="Accounts & Billing: Planned">
-  <img src="https://img.shields.io/badge/CI%2FCD-Planned-lightgrey" alt="CI/CD: Planned">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/server-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/server-ci.yml?branch=main&label=server" alt="server CI"></a>
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/scryfall-mcp-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/scryfall-mcp-ci.yml?branch=main&label=scryfall-mcp" alt="scryfall-mcp CI"></a>
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/discord-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/discord-ci.yml?branch=main&label=discord" alt="discord CI"></a>
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/webapp-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/webapp-ci.yml?branch=main&label=webapp" alt="webapp CI"></a>
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/ops-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/ops-ci.yml?branch=main&label=ops" alt="ops CI"></a>
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/actions/workflows/compose-validate.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg_local_chatbot/compose-validate.yml?branch=main&label=package" alt="package CI"></a>
 </p>
 
 <p align="center">
@@ -89,7 +97,7 @@ Every box above is a real, independently-runnable module — `webapp/`,
 | Ops (backup/restore, monitoring) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`ops/`](ops/README.md) · [status](ops/STATUS.md) |
 | Public Hosted Instance | ![Live](https://img.shields.io/badge/-Live-brightgreen) | `azor.delta43.net` |
 | Accounts, Tiers & Billing | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PLAN.md) |
-| CI/CD | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PUBLISHING_PLAN.md) |
+| CI/CD | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`.github/workflows/`](.github/workflows/) · [Actions](https://github.com/Delta-43/mtg_local_chatbot/actions) |
 
 Full feature-by-feature verification status lives in
 [`docs/FEATURES.md`](docs/FEATURES.md); what's actively being worked on is

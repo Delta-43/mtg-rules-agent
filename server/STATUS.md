@@ -18,7 +18,7 @@ developer/testers — can work on different surfaces without stepping on
 each other; see `.github/CODEOWNERS` for who reviews what.
 
 Overall project status: backend, web app, and Discord bot are all **live**.
-Accounts/tiers/billing and CI/CD are **planned, not started**. The web
+Accounts/tiers/billing is **planned, not started**; CI/CD is now **live** (see `.github/workflows/`). The web
 app's visual redesign is **paused** pending a design direction.
 
 ## 📦 This module: server/
@@ -68,11 +68,20 @@ bot, 24/7, at `azor.delta43.net`.
   future accounts/tiers/billing pivot. Phase 0 scaffolding only, verified
   live (tables create/drop correctly against a real Postgres instance)
   but **not imported by `app_api` yet** — no live request path touches it.
+- **CI** (`.github/workflows/server-ci.yml`) — `pytest` on every PR
+  touching this module, plus Docker builds and import smoke tests for
+  the `mtg-judge` and `rules-mcp` images.
 
 ### Remaining work
 
-- **CI/CD** — no automated tests on PR yet; `pytest`/`vitest`/`docker compose config`
-  checks are scoped but not built (`docs/PUBLISHING_PLAN.md` Stage 0).
+- **`rules_mcp` has no fixture-based regression test for the parser
+  itself yet** — today's CI checks that `rules_mcp` imports cleanly, not
+  that it parses real rules content correctly. A small-sample-PDF test
+  asserting a sane rule count would have caught the historical
+  807-vs-1172 silent parsing bug automatically; not yet written (see
+  `docs/PUBLISHING_PLAN.md` Stage 0).
+- **Branch protection on `main`** requiring CI to pass before merge isn't
+  turned on yet — a GitHub repo setting, not something committable.
 - **Accounts/tiers/billing Phases 1–5** — OAuth login, quota enforcement,
   Stripe billing, history UI, retention sweep. Phase 1 is blocked on
   vendoring Supabase's GoTrue role/schema bootstrap SQL (see

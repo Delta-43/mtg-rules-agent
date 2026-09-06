@@ -1,0 +1,53 @@
+name: scryfall-mcp CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/scryfall_mcp/**"
+      - ".github/workflows/scryfall-mcp-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "server/scryfall_mcp/**"
+      - ".github/workflows/scryfall-mcp-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server/scryfall_mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: server/scryfall_mcp/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        # Runs the full suite, including tests/get-card-rulings.live.test.ts,
+        # which makes genuine calls to api.scryfall.com -- deliberate (see
+        # CLAUDE.md's Scryfall section on why mocks alone aren't trusted for
+        # that tool), but means this job can fail on Scryfall-side flakiness,
+        # not just a real regression here.
+        run: npm test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t scryfall-mcp-ci ./server/scryfall_mcp

@@ -1,0 +1,62 @@
+name: server CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "!server/scryfall_mcp/**"
+      - ".github/workflows/server-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "!server/scryfall_mcp/**"
+      - ".github/workflows/server-ci.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r server/requirements.txt
+
+      - name: Run pytest
+        # No PYTHONPATH override needed: server/tests/__init__.py makes pytest
+        # walk up to server/ (the first parent without __init__.py) and insert
+        # that into sys.path, so `from app_api.main import app` resolves on
+        # its own -- see server/README.md's "Running" section for why this
+        # matters differently for uvicorn/one-off scripts (PYTHONPATH=server
+        # there, not this).
+        run: python -m pytest server/tests/ -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { name: mtg-judge, context: ./server }
+          - { name: rules-mcp, context: ./server/rules_mcp }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.target.name }} image
+        run: docker build -t ${{ matrix.target.name }}-ci ${{ matrix.target.context }}
+
+      - name: Smoke-test image imports
+        if: matrix.target.name == 'mtg-judge'
+        run: |
+          docker run --rm mtg-judge-ci python -c \
+            "from core_config import Config; import app_api.main; import llm_agent.agent; print('OK')"
+
+      - name: Smoke-test rules_mcp module imports
+        if: matrix.target.name == 'rules-mcp'
+        run: |
+          docker run --rm rules-mcp-ci python -c \
+            "import rules_mcp.server, rules_mcp.parser, rules_mcp.ingestor, rules_mcp.settings; print('OK')"
