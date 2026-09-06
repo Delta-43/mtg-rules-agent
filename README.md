@@ -1,6 +1,6 @@
 <h1 align="center">
-  <img src="shared/assets/MTG-Azor-Icon.png" width="140" alt="MTG Azor logo"><br>
-  MTG Azor
+  <img src="shared/assets/MTG-Azor-Icon.png" height="90" alt="MTG Azor icon">
+  <img src="shared/assets/MTG-Azor-Logo.png" height="90" alt="MTG Azor">
 </h1>
 
 <p align="center">
