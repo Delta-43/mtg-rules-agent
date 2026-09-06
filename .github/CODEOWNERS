@@ -24,9 +24,9 @@
 
 # Deployment/orchestration files -- monitoring/reliability should see these too,
 # since uptime/alerting config and compose changes are tightly coupled.
-/docker-compose.yml     @Delta-43 @reliability-owner
+/docker-compose.yml     @Delta-43 @ktrileo
 /docker-compose.override.yml  @Delta-43 @reliability-owner
-/Caddyfile              @Delta-43 @reliability-owner
+/Caddyfile              @Delta-43 @ktrileo
 
 # CI workflows, once they exist (see PUBLISHING_PLAN.md Stage 0).
-/.github/               @Delta-43 @reliability-owner
+/.github/               @Delta-43 @ktrileo
