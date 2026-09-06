@@ -61,15 +61,16 @@ requested by prompt.
 ## 🏗️ Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"padding": 30, "nodeSpacing": 25, "rankSpacing": 45}}}%%
 flowchart TD
     PWA["🖥️ Web App"] --> Caddy["🔀 Caddy"]
     Bot["🤖 Discord Bot"] --> Caddy
     Caddy --> API["⚡ FastAPI"]
     API --> Agent["🧭 Tool-Calling Agent"]
+    Agent --> LLM[("🧠 LLM")]
     Agent --> Rules["📖 rules-mcp"]
     Agent --> Scryfall["🃏 scryfall-mcp"]
     Agent --> Search["🌐 web_search"]
-    Agent --> LLM[("🧠 LLM")]
 ```
 
 Every box above is a real, independently-runnable module — `webapp/`,
