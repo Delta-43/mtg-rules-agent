@@ -11,7 +11,7 @@ and is required by its system prompt to end every answer with a citation block
 (rule numbers, rulings, source URLs). If it can't ground part of an answer in a
 tool result, it's instructed to say so rather than guess.
 
-`Description.md` has the full architecture writeup; `README.md` has setup/usage.
+`docs/DESCRIPTION.md` has the full architecture writeup; `README.md` has setup/usage.
 This file is oriented toward things that aren't obvious from reading one file at
 a time.
 

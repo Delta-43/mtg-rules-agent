@@ -186,7 +186,7 @@ class Config:
     )
 
     # --- Accounts/tiers/billing pivot -- scaffolding only, not read by any
-    # running request path yet. See PLAN.md's "Future: accounts, tiers &
+    # running request path yet. See docs/PLAN.md's "Future: accounts, tiers &
     # billing pivot" section. ACCOUNTS_MODE mirrors LLM_PROVIDER/
     # EMBEDDING_PROVIDER's local/hosted shape: "self_hosted" (default) keeps
     # /chat behaving exactly as it does today for every deployment that

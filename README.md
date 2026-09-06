@@ -1,410 +1,210 @@
-# MTG Judge Chatbot
+<h1 align="center">
+  <img src="shared/assets/MTG-Azor-Icon.png" width="140" alt="MTG Azor logo"><br>
+  MTG Azor
+</h1>
 
-An AI-powered Magic: The Gathering rules judge chatbot: a real tool-calling agent
-backed by a local semantic rules index, live Scryfall card data, and web search for
-contested rulings — with citations required in every answer.
+<p align="center">
+  <i>An AI Magic: The Gathering rules judge — grounded, cited, and never guessing.</i>
+</p>
 
-## Architecture
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose">
+  <a href="https://github.com/Delta-43/mtg_local_chatbot/graphs/contributors"><img src="https://img.shields.io/github/contributors-anon/Delta-43/mtg_local_chatbot?color=yellow" alt="Contributors"></a>
+  <img src="https://img.shields.io/github/last-commit/Delta-43/mtg_local_chatbot" alt="Last commit">
+</p>
 
-The backend is a **tool-calling agent** (LangChain 1.x `create_agent`), not a fixed
-classify-then-branch pipeline. It decides for itself which tools to call, in what
-order, and cites the specific rule numbers / rulings / links it used.
+<p align="center">
+  <img src="https://img.shields.io/badge/Backend-Live-brightgreen" alt="Backend: Live">
+  <img src="https://img.shields.io/badge/Discord%20Bot-Live-brightgreen" alt="Discord Bot: Live">
+  <img src="https://img.shields.io/badge/Web%20App-Live-brightgreen" alt="Web App: Live">
+  <img src="https://img.shields.io/badge/Accounts%20%26%20Billing-Planned-lightgrey" alt="Accounts & Billing: Planned">
+  <img src="https://img.shields.io/badge/CI%2FCD-Planned-lightgrey" alt="CI/CD: Planned">
+</p>
 
-- **LLM**: pluggable — an Ollama model (local weights or an [Ollama cloud
-  model](https://ollama.com/cloud), which runs on Ollama's infrastructure instead
-  of this host), or a hosted model via OpenRouter (any OpenRouter-supported
-  model). Selected by `llm_provider.provider` in `server/project_config.yml` (`local` or
-  `hosted`); the default is the Ollama cloud model `gemma4:cloud`.
-- **Rules retrieval**: [`server/rules_mcp/`](server/rules_mcp/) — a standalone MCP server (own
-  README, own Dockerfile) exposing semantic search over the Comprehensive Rules via
-  a local ChromaDB index. Self-refreshes from wizards.com on boot.
-- **Card data**: [`server/scryfall_mcp/`](server/scryfall_mcp/) — a local fork of
-  [bmurdock/scryfall-mcp](https://github.com/bmurdock/scryfall-mcp) (MIT), vendored
-  directly into this repo rather than built from a live remote clone, so it can
-  be (and has been) modified. 16 Scryfall-backed tools total: upstream's 15
-  (search, pricing, sets, deckbuilding, legality, etc.) plus `get_card_rulings`,
-  added here to close the one gap in upstream's tool set (see below).
-- **Official rulings**: `get_card_rulings` — one of `scryfall_mcp`'s tools,
-  calling the real [Scryfall Rulings API](https://scryfall.com/docs/api/rulings).
-- **Web search**: a self-hosted **SearXNG** metasearch instance plus a
-  fetch/extract step (`trafilatura`), used only for interactions that are
-  ambiguous or contested and not resolved by the rules index or official rulings.
-- **API**: FastAPI, with CORS, `X-API-Key` auth, and per-key/IP rate limiting for
-  public deployment; ready for a web UI or Discord bot to sit in front of it
-  (not included in this pass).
-- **Edge**: Caddy reverse proxy (automatic TLS for a real domain).
+<p align="center">
+  <a href="#-what-it-does">What it does</a> •
+  <a href="#-architecture">Architecture</a> •
+  <a href="#-project-status">Status</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#-tech-stack">Tech Stack</a> •
+  <a href="#-documentation">Documentation</a>
+</p>
 
-```text
-Client -> Caddy -> FastAPI (server/app_api/main.py) -> tool-calling agent (server/llm_agent/agent.py)
-                                                    |-- rules-mcp (semantic rules search)
-                                                    |-- scryfall-mcp (card data + get_card_rulings)
-                                                    `-- web_search (SearXNG + extract)
+---
+
+## 🧠 What it does
+
+MTG Azor answers Magic: The Gathering rules questions the way a real judge
+would: by looking things up, not guessing from memory. A tool-calling
+agent (not a fixed if/elif pipeline) decides for itself which of the
+Comprehensive Rules, live Scryfall card data, official rulings, or the
+open web it needs to check — then **every answer ends in a citation
+block**, verified against the real tool results it just fetched, not just
+requested by prompt.
+
+- ⚖️ **Grounded answers** — rule numbers, official rulings, and source
+  links are added only after being independently verified; nothing is
+  cited from the model's memory.
+- 🃏 **Live card data** — oracle text, legality, pricing, and rulings via
+  a native Scryfall integration, always current.
+- 🔍 **Falls back to the open web** — only for genuinely contested or
+  ambiguous interactions the rules/rulings can't resolve on their own.
+- 💬 **Two real surfaces** — a streaming web app and a Discord bot
+  (`/judge`), both talking to the same public API.
+- 🏠 **Self-hosted or public** — runs entirely on your own hardware with
+  local models, or points at hosted LLM/embedding providers for a public
+  deployment. One codebase, either way.
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    PWA["🖥️ Web App<br/><sub>webapp/</sub>"]
+    Bot["🤖 Discord Bot<br/><sub>discord_client/</sub>"]
+
+    PWA --> Caddy
+    Bot --> Caddy
+    Caddy["🔀 Caddy<br/><sub>reverse proxy · TLS</sub>"] --> API
+
+    API["⚡ FastAPI<br/><sub>server/app_api/</sub>"] --> Agent
+
+    Agent["🧭 Tool-Calling Agent<br/><sub>server/llm_agent/</sub>"]
+    Agent --> Rules["📖 rules-mcp<br/><sub>Comprehensive Rules search</sub>"]
+    Agent --> Scryfall["🃏 scryfall-mcp<br/><sub>card data + rulings</sub>"]
+    Agent --> Search["🌐 web_search<br/><sub>SearXNG + extract</sub>"]
+    Agent --> LLM[("🧠 LLM<br/><sub>Ollama / OpenRouter</sub>")]
 ```
 
-Every final answer is required (by the agent's system prompt) to end with a
-citation block: rule numbers used, official rulings used, and source URLs if web
-search was used. If the agent can't ground part of an answer in a tool result, it's
-instructed to say so rather than guess.
+Every box above is a real, independently-runnable module — see
+[Project Structure](#-project-structure) and
+[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full picture.
 
-## Quick start (local, hybrid dev)
+## 📊 Project Status
+
+| Component | Status | Detail |
+|---|:---:|---|
+| Backend (agent, API, rules & card search) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`server/`](server/README.md) |
+| Web App (PWA) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`webapp/`](webapp/README.md) · [visual redesign in progress](docs/WEBAPP_PLAN.md) |
+| Discord Bot ("Azor, High Arbiter") | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`discord_client/`](discord_client/README.md) |
+| Public Hosted Instance | ![Live](https://img.shields.io/badge/-Live-brightgreen) | `azor.delta43.net` |
+| Accounts, Tiers & Billing | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PLAN.md) |
+| CI/CD | ![Planned](https://img.shields.io/badge/-Planned-lightgrey) | [plan](docs/PUBLISHING_PLAN.md) |
+
+Full feature-by-feature verification status lives in
+[`docs/FEATURES.md`](docs/FEATURES.md); what's actively being worked on is
+in [`docs/TODO.md`](docs/TODO.md).
+
+## 🚀 Quick Start
 
 ```bash
-./setup.sh
+git clone https://github.com/Delta-43/mtg_local_chatbot.git
+cd mtg_local_chatbot
+./setup.sh      # venv, deps, dedicated Ollama instance + model pulls
+./run_bot.sh    # docker compose up rules-mcp/scryfall-mcp/searxng, then host uvicorn
 ```
 
-`setup.sh` creates or reuses `.venv`, installs the main backend's deps, starts a
-dedicated Ollama instance (see below), and pulls the configured models into it.
-Rules ingestion happens automatically inside the `rules-mcp` container on first
-boot — no separate host-side parsing step.
-
-The default model, `gemma4:cloud`, needs a one-time sign-in per machine
-(`setup.sh` will tell you if this is still needed):
-
 ```bash
-OLLAMA_HOST=localhost:11435 ollama signin
-```
-
-Then run the full stack:
-
-```bash
-./run_bot.sh
-```
-
-This brings up `rules-mcp`, `scryfall-mcp`, and `searxng` via `docker compose`
-(loopback-only ports, see below), waits for them to be healthy, then runs the
-FastAPI backend directly on the host for fast local iteration.
-
-### Ollama runtime
-
-`setup.sh` and `run_bot.sh` start a **dedicated Ollama instance** on port `11435`
-(`scripts/run_ollama.sh`), separate from any system-wide Ollama service, bound to
-`0.0.0.0` rather than loopback so Docker containers can reach it via
-`host.docker.internal`. `rules-mcp` needs a working Ollama for embeddings
-regardless of `LLM_PROVIDER`; Ollama cloud models (like the default) also route
-through this instance, which just proxies the request to Ollama's infrastructure.
-This only matters in `local` LLM mode. In `hosted` (OpenRouter) mode, Ollama is
-only used for embeddings inside `rules-mcp`.
-
-If your GPU driver hangs on Ollama's automatic offload detection, that's a
-driver-level `ollama serve` concern independent of this project — see
-[Ollama's troubleshooting docs](https://docs.ollama.com) for disabling GPU
-offload (e.g. `OLLAMA_VULKAN=0` for the Vulkan backend) if you hit it.
-
-## Docker (full stack, incl. public-facing reverse proxy)
-
-```bash
-docker-compose up --build
-```
-
-This starts `mtg-judge`, `rules-mcp`, `scryfall-mcp`, `searxng`, and `caddy`. `caddy`
-now also serves the built PWA (`webapp/`) as static assets and reverse-proxies
-`/chat`, `/chat/stream`, and `/health` to `mtg-judge` — the API and web UI share one
-origin, so no CORS configuration is needed for the primary deploy. Only `caddy`
-publishes a public port (`80`/`443`); everything else is internal to the
-`mtg-network` docker network, though `rules-mcp` (`8100`), `scryfall-mcp` (`3000`),
-and `searxng` (`8080`) are also bound to `127.0.0.1` so a host-run backend (the
-`run_bot.sh` workflow above) can reach them directly without exposing them
-publicly.
-
-For a real domain with automatic TLS *and a directly exposed port 80/443*, edit
-`Caddyfile` and replace the `:80` block with your domain (see the comment in that
-file). If you're instead using a Cloudflare Tunnel (recommended — no port needs to
-be open at all), see "Public deployment" below; leave `Caddyfile` on plain `:80` in
-that case, since TLS is terminated at Cloudflare's edge, not by Caddy. For
-OpenRouter (hosted LLM) mode, set `LLM_PROVIDER=hosted` and `OPENROUTER_API_KEY`
-before starting (see Configuration below).
-
-Note: inside Docker, `OLLAMA_BASE_URL` must point to the dedicated Ollama instance
-reachable from the containers (`http://host.docker.internal:11435` by default) —
-only relevant in `local` LLM mode; `rules-mcp` still needs it for embeddings
-regardless of `LLM_PROVIDER`.
-
-## Public deployment (Cloudflare Tunnel + R2 backup)
-
-Both of these are opt-in via [Compose
-profiles](https://docs.docker.com/compose/how-tos/profiles/) — a plain
-`docker-compose up` never starts them, and neither one's env vars are required
-unless you pass its `--profile` flag.
-
-### Cloudflare Tunnel
-
-Exposes the stack at a real domain (e.g. `azor.delta43.net`) with TLS terminated
-at Cloudflare's edge, without opening any port on the host:
-
-1. In the Cloudflare Zero Trust dashboard, create a tunnel and add a public
-   hostname pointing at `http://localhost:80`. The `cloudflared` service runs
-   with `network_mode: host` (not on `mtg-network` like everything else here),
-   so it reaches `caddy` via the host's loopback interface, not Docker DNS —
-   this matches how this box's other cloudflared tunnels are set up.
-   **If `caddy`'s port is remapped on this host** (e.g. a
-   `docker-compose.override.yml` like the one described in `TODO.md`'s "Local
-   deployment notes", needed here because `nginx_proxy_manager` already owns
-   the real `80`/`443`), point the public hostname at that port instead —
-   check with `docker port mtg-caddy`. On this host that's `127.0.0.1:8880`.
-2. Copy the tunnel's **connector token** into `CLOUDFLARE_TUNNEL_TOKEN` in
-   `.env`. This is the long `eyJ...`-style base64 string from the tunnel's
-   "install connector" command/token, not the tunnel's UUID/name — pasting
-   the UUID there will fail to authenticate.
-3. `docker-compose --profile tunnel up -d --build`
-
-`caddy`'s own `80`/`443` port mapping is harmless to leave in place (useful for a
-direct LAN/IP smoke test) but isn't what the public domain resolves to once the
-tunnel's up — that's entirely handled by Cloudflare's routing to the tunnel.
-
-### R2 backup
-
-Periodically snapshots conversation memory (`data/conversations/conversations.db`)
-and the rules index (`data/chroma/`) to a Cloudflare R2 bucket, so state survives a
-VPS rebuild — otherwise both live only in the bind-mounted `data/` directory on
-that one host.
-
-1. Create an R2 bucket and an API token (R2 → Manage API Tokens) in the
-   Cloudflare dashboard.
-2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` in
-   `.env` (`R2_BACKUP_INTERVAL_SECONDS` defaults to 3600).
-3. `docker-compose --profile backup up -d`
-
-This writes a single overwritten "latest" snapshot (`ops/backup_to_r2.py`), not
-versioned history — turn on bucket versioning in the R2 dashboard if you want
-point-in-time restore instead of just the most recent copy.
-
-To restore, **stop `mtg-judge` and `rules-mcp` first** (this overwrites the
-SQLite conversation DB and the Chroma persist dir out from under any process
-that has them open):
-
-```bash
-docker compose stop mtg-judge rules-mcp
-docker compose run --rm r2-backup python restore_from_r2.py       # dry run: lists what would be restored
-docker compose run --rm r2-backup python restore_from_r2.py --yes # actually restores
-docker compose up -d mtg-judge rules-mcp
-```
-
-Both profiles can be combined: `docker-compose --profile tunnel --profile backup up -d --build`.
-
-### Discord bot
-
-1. Register an application in the [Discord Developer Portal](https://discord.com/developers/applications),
-   add the `applications.commands` OAuth2 scope, and copy its bot token.
-2. Set `DISCORD_BOT_TOKEN` and `DISCORD_API_KEY` (a dedicated `API_KEYS`
-   entry, not shared with anything else) in `.env`. Optionally
-   `DISCORD_ALLOWED_GUILD_IDS` / `DISCORD_COOLDOWN_SECONDS` — see
-   `discord_client/README.md`.
-3. `docker-compose --profile discord up -d --build discord-bot`
-
-Not attached to `mtg-network` — it only needs outbound access to Discord's
-gateway and to the backend's public URL (`DISCORD_API_BASE_URL`, default
-`https://azor.delta43.net`), same as any other external client.
-
-## Troubleshooting
-
-### `./run_bot.sh` exits with `127`
-
-This is usually a broken virtual environment executable path (often after renaming `venv` to `.venv`).
-
-```bash
-rm -rf .venv
-python3 -m venv .venv
-./.venv/bin/pip install --upgrade pip
-./.venv/bin/pip install -r requirements.txt
-```
-
-Then retry:
-
-```bash
-./run_bot.sh
-```
-
-### API starts but requests fail or hang
-
-1. Check API health (reports whether both MCP servers are reachable):
-
-```bash
-curl -s http://localhost:8000/health
-```
-
-2. Check each backing service directly:
-
-```bash
-curl -s http://localhost:11435/api/version   # Ollama
-curl -s http://localhost:8100/health         # rules-mcp
-curl -s http://localhost:3000/health         # scryfall-mcp
-curl -s http://localhost:8080/                # searxng
-```
-
-3. If using an Ollama cloud model (`*:cloud`), confirm sign-in:
-
-```bash
-OLLAMA_HOST=localhost:11435 ollama signin
-```
-
-An unsigned-in instance returns `401 Unauthorized` on the first actual chat
-request even though the model pulled successfully (pulling a cloud model tag
-only fetches a small manifest, not weights).
-
-### `docker compose` not found
-
-`run_bot.sh` needs Docker to run `rules-mcp`, `scryfall-mcp`, and `searxng`.
-Install Docker (with the `compose` plugin, or standalone `docker-compose`).
-
-### Answers are slow or truncated
-
-- Lower generation cost by reducing `llm.num_predict` and/or `llm.num_ctx` in `server/project_config.yml`.
-- Keep `llm.reasoning: false` unless you explicitly want longer reasoning traces
-  (some models spend their whole token budget "thinking" and return little to no
-  answer if `num_predict` is tight).
-- For a local (non-cloud) model, tool-calling reliability varies a lot by model
-  size; smaller models may skip tools you'd expect them to use. Prefer `hosted`
-  mode or an Ollama cloud model for consistent tool-calling.
-
-### Docker cannot reach Ollama
-
-Networking can differ by machine. If chat fails in Docker but works locally:
-
-1. Test from container shell which endpoint is reachable.
-2. Override `OLLAMA_BASE_URL` in compose environment to that reachable host/IP.
-3. Confirm the dedicated Ollama instance is bound to `0.0.0.0`, not `127.0.0.1`
-   (see `scripts/run_ollama.sh`) — a loopback-only bind is unreachable from a
-   container even if it works fine from the host shell.
-
-## API Endpoints
-
-**Health Check** (reports LLM provider and whether rules-mcp/scryfall-mcp are reachable):
-```bash
-curl http://localhost:8000/health
-```
-
-**Chat:**
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
   -d '{"query": "What happens during the untap step?"}'
 ```
 
-Put a card in double quotes to steer the agent toward a Scryfall lookup:
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What does \"Lightning Bolt\" do?"}'
-```
+For the full Docker deployment (public-facing, incl. Cloudflare Tunnel, R2
+backup, and the Discord bot), environment variables, troubleshooting, and
+the complete API reference, see **[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md)**.
 
-The response is
-`{"answer": "...", "sources": {"rules": [...], "rulings": [...], "web_links": [...], "images": [...]}, "conversation_id": "..."}`
-— `sources` is built from the tools the agent actually called. `images` comes
-from scryfall-mcp's `get_card` (it returns a card image URL by default), so
-it's populated whenever the agent looks up a specific card, not just when
-citing rules/rulings/web results. `conversation_id`
-is always present: pass one back on your next request (same field, request
-side) to continue that thread with multi-turn memory; omit it to start fresh.
-Conversations persist in a local SQLite file (`CONVERSATION_DB_PATH`) via a
-LangGraph checkpointer, keyed by `conversation_id`.
+## 🧰 Tech Stack
 
-**Streaming chat** (Server-Sent Events, token-by-token):
-```bash
-curl -N -X POST http://localhost:8000/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What happens during the untap step?"}'
-```
-Emits `event: token` frames as the answer is generated, one `event: sources`
-frame, then `event: done` (carrying `conversation_id`) — or `event: error` in
-place of the last two if the agent run fails.
+<table>
+<tr>
+<td><strong>Backend</strong></td>
+<td>
+<img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python">
+<img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+<img src="https://img.shields.io/badge/LangChain-1C3C3C?logo=langchain&logoColor=white" alt="LangChain">
+<img src="https://img.shields.io/badge/LangGraph-1C3C3C" alt="LangGraph">
+<img src="https://img.shields.io/badge/ChromaDB-FF6F61" alt="ChromaDB">
+<img src="https://img.shields.io/badge/Ollama-000000?logo=ollama&logoColor=white" alt="Ollama">
+</td>
+</tr>
+<tr>
+<td><strong>Web App</strong></td>
+<td>
+<img src="https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black" alt="React">
+<img src="https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white" alt="Vite">
+<img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+<img src="https://img.shields.io/badge/PWA-5A0FC8?logo=pwa&logoColor=white" alt="PWA">
+</td>
+</tr>
+<tr>
+<td><strong>Discord Bot</strong></td>
+<td>
+<img src="https://img.shields.io/badge/discord.py-5865F2?logo=discord&logoColor=white" alt="discord.py">
+<img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white" alt="Python">
+</td>
+</tr>
+<tr>
+<td><strong>Data Sources</strong></td>
+<td>
+<img src="https://img.shields.io/badge/Scryfall%20API-000000" alt="Scryfall API">
+<img src="https://img.shields.io/badge/MTG%20Comprehensive%20Rules-000000" alt="MTG Comprehensive Rules">
+<img src="https://img.shields.io/badge/SearXNG-3050FF" alt="SearXNG">
+</td>
+</tr>
+<tr>
+<td><strong>Infra & Deployment</strong></td>
+<td>
+<img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
+<img src="https://img.shields.io/badge/Caddy-1F88C0?logo=caddy&logoColor=white" alt="Caddy">
+<img src="https://img.shields.io/badge/Cloudflare%20Tunnel-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare Tunnel">
+<img src="https://img.shields.io/badge/Cloudflare%20R2-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare R2">
+</td>
+</tr>
+</table>
 
-**Auth is optional, not all-or-nothing.** If `server.api_keys` is set, a
-request may omit `X-API-Key` entirely (the anonymous tier — e.g. a public
-web frontend, which can't keep a client-side key secret) or send a valid one
-(the authenticated tier — e.g. a server-side bot). A key that's present but
-invalid still gets `401`. Each tier has its own daily request quota
-(`DAILY_QUOTA_ANONYMOUS` / `DAILY_QUOTA_AUTHENTICATED`, keyed by API key or IP)
-on top of the existing per-minute rate limit — a cost ceiling against
-sustained abuse, not a precise billing mechanism. `query` is also capped at
-2000 characters (`422` if exceeded).
-
-## Configuration
-
-Primary settings live in `server/project_config.yml`. Environment variables override YAML values:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11435` | Dedicated Ollama instance endpoint |
-| `LLM_MODEL` | `gemma4:cloud` | Chat model (when `LLM_PROVIDER=local`); an Ollama cloud model tag or a local weights tag |
-| `EMBEDDING_MODEL` | `mxbai-embed-large` | Local embedding model (used by `rules-mcp` when `EMBEDDING_PROVIDER=local`) |
-| `EMBEDDING_PROVIDER` | `local` | `rules-mcp`'s embedding provider: `local` (Ollama) or `hosted` (OpenRouter) — see `server/rules_mcp/README.md`'s "Embedding provider" section |
-| `OPENROUTER_EMBEDDING_API_KEY` | *(none)* | Required when `EMBEDDING_PROVIDER=hosted` — a separate key from `OPENROUTER_API_KEY` below on purpose |
-| `OPENROUTER_EMBEDDING_MODEL` | `baai/bge-m3` | Hosted embedding model id |
-| `LLM_REASONING` | `false` | Disable model "thinking" traces |
-| `LLM_NUM_PREDICT` | `2048` | Max answer tokens |
-| `LLM_NUM_CTX` | `8192` | Context window |
-| `LLM_PROVIDER` | `local` | `local` (Ollama, incl. cloud models) or `hosted` (OpenRouter) |
-| `OPENROUTER_API_KEY` | *(none)* | Required when `LLM_PROVIDER=hosted` |
-| `OPENROUTER_MODEL` | `openrouter/auto` | Hosted model id |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Shared by both the chat and embedding hosted providers |
-| `RULES_MCP_URL` | `http://localhost:8100/mcp` | rules-mcp endpoint |
-| `SCRYFALL_MCP_URL` | `http://localhost:3000/mcp` | scryfall-mcp endpoint |
-| `SEARXNG_URL` | `http://localhost:8080` | SearXNG endpoint for `web_search` |
-| `SCRYFALL_USER_AGENT` | `MTG-Judge-Chatbot/1.0 (+https://github.com/mtg-judge)` | Sent to Scryfall by scryfall-mcp (the main backend no longer calls Scryfall directly) |
-| `CORS_ALLOWED_ORIGINS` | *(empty = disabled)* | Comma-separated origin allowlist |
-| `API_KEYS` | *(empty = disabled)* | Comma-separated valid `X-API-Key` values. A request with no key at all is still allowed (anonymous tier) — this list only validates keys that ARE presented |
-| `RATE_LIMIT_PER_MINUTE` | `20` | Per API-key/IP rate limit on `/chat`, `/chat/stream` |
-| `DAILY_QUOTA_ANONYMOUS` | `30` | Daily request cap for keyless (anonymous-tier) callers |
-| `DAILY_QUOTA_AUTHENTICATED` | `500` | Daily request cap for callers with a valid `X-API-Key` |
-| `CONVERSATION_DB_PATH` | `data/conversations/conversations.db` | SQLite file backing multi-turn conversation memory |
-| `VITE_API_BASE_URL` | *(empty)* | Build-time only, read by `webapp/Dockerfile`. Empty = same-origin deploy (Caddy serves both PWA and API); set only if the frontend is built to call a backend on a different origin |
-| `CLOUDFLARE_TUNNEL_TOKEN` | *(none)* | `cloudflared`'s connector token (the long `eyJ...` string, not the tunnel UUID) — only read under `docker-compose --profile tunnel` |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | *(none)* | R2 credentials for `ops/backup_to_r2.py` and `ops/restore_from_r2.py` — only read under `docker-compose --profile backup` (backup) or a manual `docker compose run` (restore) |
-| `R2_BACKUP_INTERVAL_SECONDS` | `3600` | How often the `backup` profile snapshots `data/` to R2 |
-| `DISCORD_BOT_TOKEN` | *(none)* | Bot token from the Discord Developer Portal — only read under `docker-compose --profile discord` |
-| `DISCORD_API_KEY` | *(none)* | Dedicated `API_KEYS` entry for the bot's own calls, tracked independently from any other caller's quota |
-| `DISCORD_API_BASE_URL` | `https://azor.delta43.net` | Public backend URL the bot calls — deliberately not an internal Docker service name |
-| `DISCORD_ALLOWED_GUILD_IDS` | *(empty = any server)* | Comma-separated guild IDs to restrict `/judge` to |
-| `DISCORD_ALLOWED_CHANNEL_IDS` | *(empty = any channel)* | Comma-separated channel IDs to restrict `/judge` to within an allowed guild |
-| `DISCORD_COOLDOWN_SECONDS` | `10` | Per-user cooldown on `/judge`, protecting the bot's shared daily quota |
-
-`rules-mcp` has its own env-var-only config (`CHROMA_PERSIST_DIR`, `PDF_PARSER_DIR`,
-etc.) — see [server/rules_mcp/README.md](server/rules_mcp/README.md).
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 mtg_local_chatbot/
-├── server/                   # Backend product -- see server/README.md
-│   ├── app_api/                  # FastAPI app (CORS, tiered auth, rate/quota limiting, /chat, /chat/stream, /health)
-│   ├── llm_agent/                # Tool-calling agent, checkpointer-backed memory, pluggable LLM provider, web_search tool
-│   ├── core_config/              # This module's own YAML-first config loader
-│   ├── accounts_db/              # Accounts/tiers/billing pivot scaffolding (Phase 0, not wired in yet)
-│   ├── rules_mcp/                # Standalone MCP server: semantic rules search (own README, own Dockerfile)
-│   ├── scryfall_mcp/             # Local fork of bmurdock/scryfall-mcp (16 tools, incl. get_card_rulings)
-│   ├── searxng/settings.yml      # Self-hosted metasearch config for web_search
-│   ├── tests/                    # pytest suite covering app_api's routes
-│   ├── Dockerfile                # Main backend container
-│   ├── requirements.txt          # Main backend's Python dependencies
-│   └── project_config.yml        # Canonical backend configuration
-├── discord_client/           # discord.py bot client for /chat -- see discord_client/README.md
-├── webapp/                   # React + Vite PWA -- built into the `caddy` image, served same-origin -- see webapp/README.md
-├── ops/                       # Backup/restore to R2 + future monitoring config -- see ops/README.md
-├── shared/                    # Cross-module source assets (brand art, design reference) -- see shared/README.md
-│   ├── assets/
-│   └── design-inspiration/
-├── data/                      # Runtime state only (gitignored): Chroma index, conversation SQLite, PDF cache
-├── setup.sh                   # One-shot local setup (.venv, deps, Ollama)
-├── run_bot.sh                 # Full stack launcher — docker compose + host uvicorn (PYTHONPATH=server)
-├── stop_bot.sh                # Stops background services started by run_bot.sh
-├── docker-compose.yml         # Full stack: mtg-judge, rules-mcp, scryfall-mcp, searxng, caddy, + optional cloudflared/r2-backup/discord-bot/accounts (profiles)
-├── Caddyfile                  # Static PWA + API reverse proxy (baked into webapp/Dockerfile's caddy stage)
-├── scripts/
-│   └── run_ollama.sh          # Dedicated Ollama instance launcher (host-level, not containerized)
-└── .github/CODEOWNERS         # Module -> reviewer mapping
+├── server/            # Backend: FastAPI, the agent, rules-mcp, scryfall-mcp
+├── discord_client/    # Discord bot ("Azor, High Arbiter")
+├── webapp/            # React + Vite PWA
+├── ops/               # R2 backup/restore, future monitoring
+├── shared/            # Cross-module brand assets & design reference
+├── docs/              # Everything below — architecture, features, plans
+└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts)
 ```
 
-## Performance notes
+Every module has its own README with setup/run detail for that piece
+specifically — start there when working on a particular surface; start
+with [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full
+cross-cutting picture.
 
-- `rules-mcp`'s first-boot rules ingestion (~1300 chunks) takes roughly 8-10 minutes
-  on a mid-range CPU; expect longer on older/slower hardware. This only runs the
-  embedding model locally — chat inference with the default `gemma4:cloud` model
-  doesn't touch local compute at all. Ingestion is incremental after that first
-  pass (see `server/rules_mcp/README.md`) — a later Comprehensive Rules update only
-  re-embeds the rules that actually changed, not all ~1300 chunks again.
-- A chat query typically involves multiple tool round-trips (rules search,
-  possibly Scryfall and/or web search), so response time depends more on how many
-  tools the model decides to call than on raw model speed.
-- Tool-calling reliability varies significantly by model. The default,
-  `gemma4:cloud`, calls tools reliably; small local models are more prone to
-  skipping tools they should use or answering from memory instead.
+## 📚 Documentation
+
+| Document | What's in it |
+|---|---|
+| [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) | Full architecture, configuration, deployment, API reference, troubleshooting |
+| [`docs/FEATURES.md`](docs/FEATURES.md) | Feature-by-feature requirement + verification catalog |
+| [`docs/PLAN.md`](docs/PLAN.md) | What's done, and why, at the project level |
+| [`docs/TODO.md`](docs/TODO.md) | The working next-steps list |
+| [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md) | Self-hosted OSS + hosted SaaS publishing strategy |
+| [`docs/WEBAPP_PLAN.md`](docs/WEBAPP_PLAN.md) | In-progress PWA visual redesign |
+| [`CLAUDE.md`](CLAUDE.md) | Deep implementation notes — the non-obvious "why" behind the code |
+| [`server/README.md`](server/README.md), [`discord_client/README.md`](discord_client/README.md), [`webapp/README.md`](webapp/README.md), [`ops/README.md`](ops/README.md), [`shared/README.md`](shared/README.md) | Per-module setup & run instructions |
+
+## 🤝 Contributing
+
+The codebase is split into independent modules
+(`server/`/`discord_client/`/`webapp/`/`ops/`) specifically so multiple
+people can work on different surfaces without stepping on each other —
+see [`.github/CODEOWNERS`](.github/CODEOWNERS) for who reviews what.
+Start with the README of the module you're touching, then
+[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for how it fits into the
+whole.
+
+## 📄 License
+
+[GNU AGPL v3.0](LICENSE)

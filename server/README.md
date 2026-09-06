@@ -16,7 +16,7 @@ module needs, and doesn't duplicate that.
 - `core_config/` — this module's own config loader (YAML-first,
   env-override) — reads `project_config.yml` in this same directory.
 - `accounts_db/` — SQLAlchemy models + Alembic migration for the future
-  accounts/tiers/billing pivot (see root `PLAN.md`). Not imported by
+  accounts/tiers/billing pivot (see root `docs/PLAN.md`). Not imported by
   `app_api` yet — Phase 0 scaffolding only.
 - `rules_mcp/` — standalone MCP server (semantic search over the MTG
   Comprehensive Rules). **Self-contained by design** — no imports from
@@ -74,7 +74,7 @@ note above.
 rather than the generic backend — it doesn't move out, because
 `ACCOUNTS_MODE` is designed as an opt-in capability any self-hoster could
 turn on for their own instance, not something specific to one hosted
-deployment. See root `PUBLISHING_PLAN.md`'s "Why the repo splits the way
+deployment. See root `docs/PUBLISHING_PLAN.md`'s "Why the repo splits the way
 it does" for the actual dividing line used across this whole reorg
 (secrets/instance-identity vs. product code) if you're wondering why
 something else did or didn't land here.

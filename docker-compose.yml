@@ -242,7 +242,7 @@ services:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       - API_BASE_URL=${DISCORD_API_BASE_URL:-https://azor.delta43.net}
       # Dedicated key (not shared with anything else) so this bot's usage is
-      # tracked against its own daily quota -- see root CLAUDE.md/TODO.md.
+      # tracked against its own daily quota -- see root CLAUDE.md/docs/TODO.md.
       - API_KEY=${DISCORD_API_KEY:-}
       - ALLOWED_GUILD_IDS=${DISCORD_ALLOWED_GUILD_IDS:-}
       - ALLOWED_CHANNEL_IDS=${DISCORD_ALLOWED_CHANNEL_IDS:-}
@@ -252,7 +252,7 @@ services:
       - discord
 
   # Opt-in: `docker-compose --profile accounts up`. Scaffolding for the
-  # future accounts/tiers/billing pivot (see PLAN.md, accounts_db/README.md)
+  # future accounts/tiers/billing pivot (see docs/PLAN.md, accounts_db/README.md)
   # -- self-hosted Supabase, trimmed to just these two containers.
   # Deliberately NOT running PostgREST/Realtime/Storage/Kong/Studio/
   # analytics from the official bundle -- FastAPI talks to Postgres
@@ -295,7 +295,7 @@ services:
       - GOTRUE_JWT_EXP=3600
       - GOTRUE_DISABLE_SIGNUP=false
       # OAuth-only login (no self-hosted password storage/reset flow) --
-      # see PLAN.md's auth decision.
+      # see docs/PLAN.md's auth decision.
       - GOTRUE_EXTERNAL_EMAIL_ENABLED=false
       - GOTRUE_EXTERNAL_GOOGLE_ENABLED=${OAUTH_GOOGLE_CLIENT_ID:+true}
       - GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID=${OAUTH_GOOGLE_CLIENT_ID:-}

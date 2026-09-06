@@ -3,7 +3,7 @@
 entirely; these models never touch it, and reference it only via a plain
 `user_id` UUID column with no hard cross-schema foreign key, so this
 package's Alembic migrations stay independent of GoTrue's own schema
-versioning). See accounts_db/README.md and PLAN.md's "Future: accounts,
+versioning). See accounts_db/README.md and docs/PLAN.md's "Future: accounts,
 tiers & billing pivot" section -- this package is not imported by app_api
 yet, purely scaffolding."""
 

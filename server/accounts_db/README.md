@@ -1,7 +1,7 @@
 # accounts_db (scaffolding)
 
 Postgres models/migrations for the future accounts/tiers/billing pivot —
-see the root `PLAN.md`'s "Future: accounts, tiers & billing pivot" section
+see the root `docs/PLAN.md`'s "Future: accounts, tiers & billing pivot" section
 for the full design. **Not imported by `app_api` yet.** Nothing here
 changes the app's behavior today; it's groundwork so that work is smaller
 later.
