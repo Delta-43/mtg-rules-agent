@@ -75,7 +75,10 @@ even though production itself now runs `hosted`.
 - **API** (`app_api/`) — `/chat`, `/chat/stream` (SSE), `/health`; tiered
   auth (anonymous vs. authenticated `X-API-Key`), per-minute rate limiting
   plus daily quotas, multi-turn conversation memory via a LangGraph
-  SQLite checkpointer.
+  SQLite checkpointer. Anonymous buckets by real client IP (`_client_ip()`,
+  preferring Cloudflare's `CF-Connecting-IP`), not the proxy's — fixed
+  2026-09-06 after finding every anonymous visitor previously shared one
+  bucket (Caddy's own bridge IP); see `docs/FEATURES.md`'s H4 entry.
 - **Several real hardening fixes** found via live Discord/PWA usage, all
   in the shared agent so every caller benefits: off-topic-question
   refusal, duplicate-citation-block stripping, cross-turn citation
@@ -92,6 +95,13 @@ even though production itself now runs `hosted`.
 
 ### Remaining work
 
+- **Firewall verification for the `_client_ip()` fix's trust assumption** —
+  it trusts `CF-Connecting-IP`, which only holds if Caddy is reachable
+  *exclusively* through the Cloudflare Tunnel. On this host, Caddy's
+  80/tcp maps to `0.0.0.0:8880` (all interfaces, not loopback-only) —
+  `sudo ufw status` couldn't be checked non-interactively during this
+  session, so whether a host firewall actually blocks public access to
+  that port is unconfirmed. Needs a firewall rule, not a code change.
 - **`rules_mcp` has no fixture-based regression test for the parser
   itself yet** — today's CI checks that `rules_mcp` imports cleanly, not
   that it parses real rules content correctly. A small-sample-PDF test

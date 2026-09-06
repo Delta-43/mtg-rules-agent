@@ -246,6 +246,31 @@ import time; give it the same real numeric default `core_config` itself
 uses (`${VAR:-20}`, not `${VAR:-}`). String/list-typed vars (`_parse_csv_list`,
 plain string) don't have this problem — empty is a valid value for them.
 
+**Anonymous rate-limit/quota bucketing needs the real client IP, not the
+raw socket peer** — `app_api/main.py`'s `_client_ip()` exists specifically
+because `slowapi`'s `get_remote_address()` reads `request.client.host`,
+which for any request proxied through Caddy is always Caddy's own
+container IP (the last hop), never the actual visitor. Found live: every
+anonymous request landed in the exact same `usage_counters` bucket
+(Caddy's bridge IP, confirmed via `docker network inspect`) regardless of
+which real IP made it — meaning the documented "per-visitor" anonymous
+daily quota and per-minute rate limit were, in practice, one shared pool
+across every anonymous visitor combined. `_client_ip()` prefers
+`CF-Connecting-IP` (set by Cloudflare's own edge on every tunneled
+request, and overwritten by Cloudflare regardless of what a client sends,
+so it can be trusted for traffic that genuinely came through the tunnel),
+then the first hop of `X-Forwarded-For`, then falls back to the raw
+socket peer for non-proxied access (host-run dev via `run_bot.sh`). Caddy
+doesn't need any config change for this — `reverse_proxy` already passes
+headers through unmodified. **Residual caveat, not fixed**: this only
+holds if Caddy is reachable *only* through the tunnel. `docker-compose.yml`'s
+`caddy` service also publishes 80/443 directly; if that mapping is bound
+to a public interface and not blocked by a host firewall, a client could
+bypass Cloudflare entirely and spoof `CF-Connecting-IP` themselves, since
+Caddy has no special handling for it. Confirm your firewall actually
+restricts public access to whatever host port Caddy maps to (`docker port
+mtg-caddy`) if the tunnel is meant to be the sole ingress.
+
 **LLM provider is pluggable**: `llm_provider.build_chat_model()` returns either
 `ChatOllama` (`LLM_PROVIDER=local`) or `ChatOpenAI` pointed at OpenRouter
 (`LLM_PROVIDER=hosted`). The default model, `gemma4:cloud`, is an **Ollama cloud

@@ -31,9 +31,54 @@ STATIC_DIR: Path = Path(__file__).resolve().parent / "static"
 INDEX_FILE: Path = STATIC_DIR / "index.html"
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort real client IP behind the Caddy + Cloudflare Tunnel proxy
+    chain this app is deployed behind in production.
+
+    Without this, every anonymous request -- from every real visitor,
+    combined -- collapses to the same bucket: Caddy's own container IP on
+    `mtg-network`, since `get_remote_address()` just reads the raw ASGI
+    socket peer, which for any proxied request is always the last hop
+    (Caddy), never the actual visitor. That means the anonymous daily quota
+    and per-minute rate limit were, in practice, one shared pool across
+    every anonymous visitor at once rather than per-visitor as documented --
+    confirmed live: `172.25.0.2` (Caddy's bridge IP, per `docker network
+    inspect`) was the anonymous bucket key for every proxied request
+    regardless of which real IP made it.
+
+    `CF-Connecting-IP` is set by Cloudflare's own edge on every request that
+    passes through it, and Cloudflare overwrites any client-supplied value
+    of this specific header at their edge -- so for traffic that genuinely
+    came through Cloudflare (the tunnel), it can be trusted. Caddy's
+    `reverse_proxy` doesn't strip or rewrite it, so it reaches this app
+    unmodified. Falls back to the first hop of `X-Forwarded-For` (which
+    Caddy appends its own hop onto, without discarding whatever Cloudflare/
+    cloudflared already set), then to the raw socket peer for requests that
+    never go through Caddy at all (host-run dev via `run_bot.sh`, or a
+    direct `docker run`/test client).
+
+    Residual trust caveat, not fixed here: this only holds if Caddy is
+    reachable *only* through Cloudflare. `docker-compose.yml`'s `caddy`
+    service also publishes 80/443 directly -- if that mapping is bound to a
+    public interface (not just loopback) and not blocked by a host firewall,
+    a client hitting Caddy that way bypasses Cloudflare's edge entirely and
+    could set an arbitrary `CF-Connecting-IP` themselves, since Caddy has no
+    special handling for this header. Confirm your firewall actually
+    restricts public access to whatever host port Caddy is bound to (check
+    `docker port mtg-caddy`) if you rely on the tunnel as the sole ingress.
+    """
+    cf_connecting_ip = request.headers.get("CF-Connecting-IP")
+    if cf_connecting_ip:
+        return cf_connecting_ip
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return get_remote_address(request)
+
+
 def _rate_limit_key(request: Request) -> str:
     api_key = request.headers.get("X-API-Key")
-    return api_key or get_remote_address(request)
+    return api_key or _client_ip(request)
 
 
 limiter = Limiter(key_func=_rate_limit_key)
