@@ -61,24 +61,20 @@ requested by prompt.
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart LR
-    PWA["🖥️ Web App<br/><sub>webapp/</sub>"]
-    Bot["🤖 Discord Bot<br/><sub>discord_client/</sub>"]
-
-    PWA --> Caddy
-    Bot --> Caddy
-    Caddy["🔀 Caddy<br/><sub>reverse proxy · TLS</sub>"] --> API
-
-    API["⚡ FastAPI<br/><sub>server/app_api/</sub>"] --> Agent
-
-    Agent["🧭 Tool-Calling Agent<br/><sub>server/llm_agent/</sub>"]
-    Agent --> Rules["📖 rules-mcp<br/><sub>Comprehensive Rules search</sub>"]
-    Agent --> Scryfall["🃏 scryfall-mcp<br/><sub>card data + rulings</sub>"]
-    Agent --> Search["🌐 web_search<br/><sub>SearXNG + extract</sub>"]
-    Agent --> LLM[("🧠 LLM<br/><sub>Ollama / OpenRouter</sub>")]
+flowchart TD
+    PWA["🖥️ Web App"] --> Caddy["🔀 Caddy"]
+    Bot["🤖 Discord Bot"] --> Caddy
+    Caddy --> API["⚡ FastAPI"]
+    API --> Agent["🧭 Tool-Calling Agent"]
+    Agent --> Rules["📖 rules-mcp"]
+    Agent --> Scryfall["🃏 scryfall-mcp"]
+    Agent --> Search["🌐 web_search"]
+    Agent --> LLM[("🧠 LLM")]
 ```
 
-Every box above is a real, independently-runnable module — see
+Every box above is a real, independently-runnable module — `webapp/`,
+`discord_client/`, `server/app_api/`, `server/llm_agent/`,
+`server/rules_mcp/`, `server/scryfall_mcp/`, respectively. See
 [Project Structure](#-project-structure) and
 [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full picture.
 
