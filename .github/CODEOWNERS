@@ -20,7 +20,7 @@
 /webapp/                @Delta-43 @dev-tester-1 @dev-tester-2
 
 # Backup/restore + future monitoring config -- the reliability/monitoring owner.
-/ops/                   @Delta-43 @reliability-owner
+/ops/                   @Delta-43 @ktrileo
 
 # Deployment/orchestration files -- monitoring/reliability should see these too,
 # since uptime/alerting config and compose changes are tightly coupled.
