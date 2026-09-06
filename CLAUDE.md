@@ -262,14 +262,19 @@ so it can be trusted for traffic that genuinely came through the tunnel),
 then the first hop of `X-Forwarded-For`, then falls back to the raw
 socket peer for non-proxied access (host-run dev via `run_bot.sh`). Caddy
 doesn't need any config change for this — `reverse_proxy` already passes
-headers through unmodified. **Residual caveat, not fixed**: this only
-holds if Caddy is reachable *only* through the tunnel. `docker-compose.yml`'s
-`caddy` service also publishes 80/443 directly; if that mapping is bound
-to a public interface and not blocked by a host firewall, a client could
-bypass Cloudflare entirely and spoof `CF-Connecting-IP` themselves, since
-Caddy has no special handling for it. Confirm your firewall actually
-restricts public access to whatever host port Caddy maps to (`docker port
-mtg-caddy`) if the tunnel is meant to be the sole ingress.
+headers through unmodified. This only holds if Caddy is reachable *only*
+through the tunnel, which is worth checking on any deployment: this
+host's `docker-compose.override.yml` had `caddy` bound to `0.0.0.0` (every
+interface) while every other service in that same file was already
+`127.0.0.1`-only — pure unnecessary exposure, since `cloudflared`
+(`network_mode: host`) reaches Caddy via `localhost` regardless of
+whether it's bound to `0.0.0.0` or loopback-only. Rebound to `127.0.0.1`;
+verified the host's real LAN-facing IP can no longer reach Caddy at all
+while the real public path through the tunnel still works end-to-end.
+`docker-compose.yml`'s `caddy` service definition itself still publishes
+80/443 broadly (correct for a generic self-hoster who wants LAN/direct
+access) — this specific tightening is a host-local `docker-compose.override.yml`
+concern, not a change to the base compose file every deployment gets.
 
 **LLM provider is pluggable**: `llm_provider.build_chat_model()` returns either
 `ChatOllama` (`LLM_PROVIDER=local`) or `ChatOpenAI` pointed at OpenRouter
