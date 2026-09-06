@@ -31,25 +31,48 @@ two MCP sub-services it talks to (`rules_mcp/`, `scryfall_mcp/`), plus
 ### Status: ✅ Live
 
 Serving real production traffic through both the web app and the Discord
-bot, 24/7, at `azor.delta43.net`. Currently running `LLM_PROVIDER=hosted`
-(OpenRouter, `z-ai/glm-5.3-flash`) — a deployment-time `.env` choice, not
-a code default (the code default stays `local`/`gemma4:cloud` for
-self-hosters). Switched 2026-09-06 after finding the previously-configured
-`local` setup was itself broken (see the note below) — re-verified the
-full request surface end-to-end afterward: citations/pruning, multi-turn
-memory, streaming, tiered auth, rate limits, both daily quotas, off-topic
-and jailbreak refusal, and the Discord bot's own formatting pipeline
-(mana symbols, table→embed) all confirmed working against the new
-provider, not just the happy path.
+bot, 24/7, at `azor.delta43.net`. Currently running `LLM_PROVIDER=local`
+(`gemma4:cloud`, the documented default) — a deployment-time `.env`
+choice, not a hardcoded requirement.
 
-**Found and fixed while switching providers**: the previously-live
-`local` config (`LLM_MODEL=qwen3.5:0.8b`) was not actually a valid local
-Ollama model on the dedicated instance, and real requests were silently
-falling back into failures against the Ollama Cloud account's own session
-usage limit — meaning `/chat` may have been unreliable under the old
-config independent of anything in this switch. Restored to the
-documented default (`gemma4:cloud`) as the `local`-mode fallback config
-even though production itself now runs `hosted`.
+**2026-09-06: a same-day round trip through both providers, driven by
+real production symptoms, not speculation.** Sequence:
+1. Switched to `hosted` (OpenRouter) per direct request. Found the
+   previously-live `local` config (`LLM_MODEL=qwen3.5:0.8b`) was itself
+   broken — not a real pulled Ollama model, silently failing against the
+   Ollama Cloud account's session limit. Restored `gemma4:cloud` as the
+   `local`-mode default regardless.
+2. The first requested OpenRouter model (`google/gemma-4-31b-it:free`)
+   was blocked by a BYOK Google AI Studio quota on the OpenRouter
+   account; switched to `z-ai/glm-5.3-flash` (previously verified
+   working), and the full request surface was re-verified end-to-end
+   against it — citations/pruning, multi-turn memory, streaming, tiered
+   auth, rate limits, both daily quotas, refusals, and the Discord bot's
+   formatting pipeline.
+3. **Real users then reported real symptoms**: the Discord bot replying
+   very slowly with a formatting glitch, the web app failing outright
+   with "Couldn't reach the judge." Investigated via actual production
+   logs, not guesses: OpenRouter completions for `z-ai/glm-5.3-flash`
+   were taking 10-11 seconds *each*, compounding to ~40s total for a
+   multi-tool-call question — confirmed by timestamp gaps in
+   `mtg-judge`'s own logs, not inferred. Caddy's logs separately showed
+   one real webapp SSE connection aborted 48ms after being proxied
+   (`"reading: context canceled"`) from a real visitor, right after that
+   slow exchange — no application-level abort logic exists in `webapp`'s
+   code to explain a self-cancel that fast, so this reads as a
+   client/network-layer event, plausibly related to the backend being
+   slow at the time, though not conclusively proven.
+4. Checked whether Ollama Cloud's session limit (the reason for step 1)
+   had cleared — it had. **Switched back to `local`/`gemma4:cloud`** and
+   re-ran the exact same complex real question that was slow on
+   OpenRouter: **6.1 seconds**, correct answer, correct citations — roughly
+   6-7x faster than the ~40s seen on `z-ai/glm-5.3-flash` minutes earlier.
+
+Net: production is back on the provider with the longest track record of
+reliable, fast tool-calling in this project's history. The OpenRouter
+path itself is proven to work correctly (verified thoroughly in step 2)
+and remains available if `local`/Ollama Cloud ever becomes the
+bottleneck again — just not faster today.
 
 ### Features
 
