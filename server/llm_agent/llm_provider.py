@@ -1,7 +1,11 @@
+import logging
+
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from core_config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class LLMConfigError(RuntimeError):
@@ -25,6 +29,22 @@ def build_chat_model():
             api_key=Config.OPENROUTER_API_KEY,
             model=Config.OPENROUTER_MODEL,
             temperature=0.1,
+        )
+
+    if Config.LLM_MODEL.endswith(":cloud"):
+        # LLM_PROVIDER=local only means "talks to your own Ollama instance" --
+        # it does NOT mean fully offline/air-gapped. A ":cloud" tag routes
+        # inference to Ollama's own infrastructure (requires internet + a
+        # one-time `ollama signin`); the client here just proxies to it. Log
+        # this at startup rather than leaving it to be discovered from a
+        # confusing 401 at first inference, or from someone assuming
+        # LLM_PROVIDER=local was a guarantee of no network dependency.
+        logger.warning(
+            "LLM_MODEL=%s is an Ollama cloud model: inference runs on "
+            "Ollama's infrastructure, not this host, despite LLM_PROVIDER=local. "
+            "Requires internet access and a one-time 'ollama signin'. For a "
+            "genuinely offline/local model, set LLM_MODEL to a local weights tag.",
+            Config.LLM_MODEL,
         )
 
     return ChatOllama(

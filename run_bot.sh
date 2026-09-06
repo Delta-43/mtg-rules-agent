@@ -8,6 +8,42 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 
+# Loads .env into this shell's exported environment for the host-run backend
+# below -- docker-compose reads .env automatically for the containers it
+# manages, but this script launches app_api directly via uvicorn (no compose
+# layer in between), so without this, provider switches made via .env (e.g.
+# by setup.sh's interactive prompts) would silently never reach the process,
+# and only server/project_config.yml's committed defaults would ever apply.
+#
+# Deliberately NOT a plain `set -a; source .env; set +a`: two precedence
+# rules need to hold that a blind source wouldn't get right.
+#   1. An already-exported var (e.g. `FOO=bar ./run_bot.sh`) should win over
+#      .env, matching docker-compose's own precedence -- a blind source
+#      would instead let .env clobber it.
+#   2. A blank value in .env (e.g. `LLM_MODEL=`, meaning "use
+#      project_config.yml's default") must be treated as unset, not as "set
+#      to empty string" -- docker-compose's `${VAR:-default}` interpolation
+#      already treats blank and absent identically, but core_config's
+#      _resolve() does NOT: `os.getenv()` returns "" (not None) for a
+#      set-but-blank var, which _resolve() treats as a real override and
+#      uses in place of the YAML default. A blind source would export
+#      LLM_MODEL="" and silently break the "blank = use the real default"
+#      contract .env.example documents.
+load_env_file() {
+  local file="$1" line key value
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ "${line}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ -n "${!key+x}" ]] && continue
+    [[ -z "${value}" ]] && continue
+    export "${key}=${value}"
+  done < "${file}"
+}
+load_env_file ".env"
+
 VENV_DIR=".venv"
 DEFAULT_OLLAMA_URL="http://localhost:11435"
 

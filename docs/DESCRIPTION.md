@@ -171,8 +171,8 @@ Key implementation files:
 | Variable | Default | Purpose |
 |---|---|---|
 | `OLLAMA_BASE_URL` | `http://localhost:11435` | Dedicated Ollama instance endpoint |
-| `LLM_MODEL` | `gemma4:cloud` | Chat model (when `LLM_PROVIDER=local`); an Ollama cloud model tag or a local weights tag |
-| `EMBEDDING_MODEL` | `mxbai-embed-large` | Local embedding model (used by `rules-mcp` when `EMBEDDING_PROVIDER=local`) |
+| `LLM_MODEL` | `gemma4:cloud` | Chat model (when `LLM_PROVIDER=local`); an Ollama cloud model tag (needs internet + `ollama signin`) or a local weights tag (genuinely offline). Read by the main backend (`core_config`); forwarded to the `mtg-judge` container by `docker-compose.yml` |
+| `EMBEDDING_MODEL` | `mxbai-embed-large` | Local embedding model (used by `rules-mcp` when `EMBEDDING_PROVIDER=local`). Read independently by `rules_mcp/settings.py` (a separate env read from `LLM_MODEL` above -- `rules_mcp` doesn't import `core_config`, see its README); forwarded to the `rules-mcp` container by `docker-compose.yml` |
 | `EMBEDDING_PROVIDER` | `local` | `rules-mcp`'s embedding provider: `local` (Ollama) or `hosted` (OpenRouter) — see `server/rules_mcp/README.md`'s "Embedding provider" section |
 | `OPENROUTER_EMBEDDING_API_KEY` | *(none)* | Required when `EMBEDDING_PROVIDER=hosted` — a separate key from `OPENROUTER_API_KEY` below on purpose |
 | `OPENROUTER_EMBEDDING_MODEL` | `baai/bge-m3` | Hosted embedding model id |

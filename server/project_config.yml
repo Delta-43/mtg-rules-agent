@@ -3,10 +3,19 @@ ollama:
 
 models:
   # Ollama cloud model -- inference runs on Ollama's infrastructure, not this
-  # host. Requires `ollama signin` once per machine (see README). The embedding
-  # model below is always a real local model regardless of this setting.
+  # host. Requires `ollama signin` once per machine (see README). Override
+  # with a real local weights tag for genuinely offline/local inference
+  # (build_chat_model() logs a warning at startup if this is still a
+  # ":cloud" tag with LLM_PROVIDER=local, so this isn't a silent surprise).
+  #
+  # No `embedding` key here -- the embedding model is rules-mcp's own
+  # concern (a separate service, self-contained by design -- see root
+  # CLAUDE.md). Set it via that service's own EMBEDDING_MODEL env var (see
+  # server/rules_mcp/README.md), not here; a duplicate copy used to live in
+  # this file too, but nothing ever actually read it for embedding
+  # behavior -- only setup.sh's `ollama pull` step did, and only by
+  # coincidence of a matching default.
   llm: gemma4:cloud
-  embedding: mxbai-embed-large
 
 llm:
   reasoning: false

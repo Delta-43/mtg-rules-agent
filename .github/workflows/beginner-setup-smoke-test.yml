@@ -1,0 +1,206 @@
+name: beginner setup smoke test
+
+# Exercises the actual "clone it and get running" path a new user hits --
+# ./setup.sh then ./run_bot.sh -- end to end on a real GitHub-hosted runner,
+# rather than just unit tests / image builds. Two separate jobs, deliberately
+# not one, because they have very different trust/cost profiles:
+#
+#   local-model-smoke-test: always runs, on any push/PR to main, no
+#     credentials needed. Proves the actual LLM_PROVIDER=local/
+#     EMBEDDING_PROVIDER=local code paths work end to end (Ollama install,
+#     serve, pull, rules-mcp ingestion, a real /chat call) using small, real,
+#     fully-local model tags instead of this repo's real default
+#     (gemma4:cloud) -- see that job's steps for why.
+#
+#   cloud-model-smoke-test: only runs on manual dispatch, and only if an
+#     OLLAMA_API_KEY secret has been configured (skips cleanly otherwise).
+#     This is the one that actually tests gemma4:cloud, the real default --
+#     but doing that requires authenticating against a real Ollama account
+#     (`ollama signin` itself is interactive-only, confirmed against the
+#     actual CLI -- no flags besides --help; OLLAMA_API_KEY from
+#     ollama.com/settings/keys is Ollama's own documented headless-auth path
+#     for automation instead), which draws down that account's real
+#     session/weekly quota. Deliberately not on push/pull_request: GitHub
+#     doesn't expose secrets to workflows triggered by a fork's PR anyway (a
+#     deliberate security boundary, not an oversight to work around), and a
+#     shared personal account's quota shouldn't be spent on every commit
+#     regardless.
+#
+# No `paths:` filter on the required job -- see compose-validate.yml's own
+# comment on why a required check needs to always run, not be skippable by
+# which files a PR happens to touch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  local-model-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama
+        run: |
+          ollama serve > ollama.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -s http://localhost:11434/api/version >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:11434/api/version >/dev/null 2>&1 || {
+            echo "Ollama failed to start"; cat ollama.log; exit 1;
+          }
+
+      - name: Run setup.sh non-interactively against small local models
+        env:
+          # Overrides project_config.yml's real default (gemma4:cloud /
+          # mxbai-embed-large) for this job only, via .env (setup.sh writes
+          # whatever LLM_MODEL/EMBEDDING_MODEL core_config already resolves
+          # to at the time it runs -- these env vars make that resolution
+          # pick up small local tags instead). This still exercises the
+          # exact same LLM_PROVIDER=local/EMBEDDING_PROVIDER=local code
+          # paths a real beginner hits by default -- only the specific tags
+          # differ, chosen to fit a GitHub-hosted runner's 7GB RAM and keep
+          # the job fast, and specifically to avoid needing Ollama cloud
+          # auth (see cloud-model-smoke-test below for that path instead).
+          LLM_MODEL: llama3.2:1b
+          EMBEDDING_MODEL: all-minilm
+        run: ./setup.sh --non-interactive
+
+      - name: Bring up the stack and start the backend
+        run: |
+          ./run_bot.sh > run_bot.log 2>&1 &
+          # rules-mcp's first-boot ingestion is documented to take ~8-10
+          # minutes on a 4-core reference host (see root CLAUDE.md); a
+          # GitHub-hosted runner's 2 cores plus the smaller all-minilm
+          # embedding model roughly offset each other, but this is generous
+          # on purpose -- a slow ingest isn't a failure, only a genuine hang
+          # or crash is.
+          for _ in $(seq 1 900); do
+            curl -s http://localhost:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:8000/health || {
+            echo "Backend never became healthy"; cat run_bot.log; exit 1;
+          }
+
+      - name: Ask a real rules question end-to-end
+        run: |
+          response=$(curl -s -X POST http://localhost:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"query": "What happens during the untap step?"}')
+          echo "${response}"
+          echo "${response}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          assert data.get('answer'), 'no answer field in the response'
+          assert data.get('sources', {}).get('rules'), (
+              'no rule citations in sources -- rules ingestion likely did '
+              'not complete, or search_rules/citation verification broke'
+          )
+          print('OK: got an answer with', len(data['sources']['rules']), 'rule citation(s)')
+          "
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "--- ollama.log ---"; cat ollama.log 2>/dev/null || true
+          echo "--- run_bot.log ---"; cat run_bot.log 2>/dev/null || true
+          docker compose logs || true
+
+  cloud-model-smoke-test:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check OLLAMA_API_KEY is configured
+        id: check
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          if [ -z "${OLLAMA_API_KEY}" ]; then
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::OLLAMA_API_KEY secret not set -- skipping the real gemma4:cloud smoke test. Add it under Settings > Secrets and variables > Actions (create the key at ollama.com/settings/keys) to enable this job."
+          else
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.configured == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.configured == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install Ollama
+        if: steps.check.outputs.configured == 'true'
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama, authenticated for cloud models
+        if: steps.check.outputs.configured == 'true'
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          ollama serve > ollama.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -s http://localhost:11434/api/version >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:11434/api/version >/dev/null 2>&1 || {
+            echo "Ollama failed to start"; cat ollama.log; exit 1;
+          }
+
+      - name: Run setup.sh non-interactively against the real defaults
+        if: steps.check.outputs.configured == 'true'
+        # No LLM_MODEL/EMBEDDING_MODEL override here -- this job exists
+        # specifically to test project_config.yml's actual committed
+        # default (gemma4:cloud) rather than a local stand-in.
+        run: ./setup.sh --non-interactive
+
+      - name: Bring up the stack and start the backend
+        if: steps.check.outputs.configured == 'true'
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          ./run_bot.sh > run_bot.log 2>&1 &
+          for _ in $(seq 1 900); do
+            curl -s http://localhost:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:8000/health || {
+            echo "Backend never became healthy"; cat run_bot.log; exit 1;
+          }
+
+      - name: Ask a real rules question end-to-end
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          response=$(curl -s -X POST http://localhost:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"query": "What happens during the untap step?"}')
+          echo "${response}"
+          echo "${response}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          assert data.get('answer'), 'no answer field in the response'
+          assert data.get('sources', {}).get('rules'), 'no rule citations in sources'
+          print('OK: got an answer with', len(data['sources']['rules']), 'rule citation(s)')
+          "
+
+      - name: Dump logs on failure
+        if: failure() && steps.check.outputs.configured == 'true'
+        run: |
+          echo "--- ollama.log ---"; cat ollama.log 2>/dev/null || true
+          echo "--- run_bot.log ---"; cat run_bot.log 2>/dev/null || true
+          docker compose logs || true

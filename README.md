@@ -108,9 +108,19 @@ in [`docs/TODO.md`](docs/TODO.md).
 ```bash
 git clone https://github.com/Delta-43/mtg_local_chatbot.git
 cd mtg_local_chatbot
-./setup.sh      # venv, deps, dedicated Ollama instance + model pulls
-./run_bot.sh    # docker compose up rules-mcp/scryfall-mcp/searxng, then host uvicorn
+./setup.sh      # interactive: pick chat/embedding provider, deployment shape
+./run_bot.sh    # (dev-only shape) docker compose up rules-mcp/scryfall-mcp/searxng, then host uvicorn
 ```
+
+`./setup.sh` asks a few questions the first time you run it — local Ollama or
+hosted OpenRouter for chat, same for embeddings, and whether you want a local
+dev setup only or the full Caddy-fronted deployment (webapp + optionally the
+Discord bot) — then writes the answers to a local `.env` file (never to a
+file this repo tracks). Run it non-interactively with `./setup.sh --yes` to
+skip the prompts and keep whatever's already configured (defaults to fully
+local on a first run). Switching providers later is just editing `.env` and
+restarting; see `docs/DESCRIPTION.md`'s environment variable reference for
+every setting.
 
 ```bash
 curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
