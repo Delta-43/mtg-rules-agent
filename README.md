@@ -61,8 +61,8 @@ requested by prompt.
 ## 🏗️ Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"padding": 30, "nodeSpacing": 25, "rankSpacing": 45}}}%%
-flowchart TD
+%%{init: {"themeVariables": {"fontSize": "12px"}, "flowchart": {"useMaxWidth": true, "padding": 10, "nodeSpacing": 15, "rankSpacing": 30}}}%%
+flowchart LR
     PWA["🖥️ Web App"] --> Caddy["🔀 Caddy"]
     Bot["🤖 Discord Bot"] --> Caddy
     Caddy --> API["⚡ FastAPI"]
