@@ -31,7 +31,25 @@ two MCP sub-services it talks to (`rules_mcp/`, `scryfall_mcp/`), plus
 ### Status: ✅ Live
 
 Serving real production traffic through both the web app and the Discord
-bot, 24/7, at `azor.delta43.net`.
+bot, 24/7, at `azor.delta43.net`. Currently running `LLM_PROVIDER=hosted`
+(OpenRouter, `z-ai/glm-5.3-flash`) — a deployment-time `.env` choice, not
+a code default (the code default stays `local`/`gemma4:cloud` for
+self-hosters). Switched 2026-09-06 after finding the previously-configured
+`local` setup was itself broken (see the note below) — re-verified the
+full request surface end-to-end afterward: citations/pruning, multi-turn
+memory, streaming, tiered auth, rate limits, both daily quotas, off-topic
+and jailbreak refusal, and the Discord bot's own formatting pipeline
+(mana symbols, table→embed) all confirmed working against the new
+provider, not just the happy path.
+
+**Found and fixed while switching providers**: the previously-live
+`local` config (`LLM_MODEL=qwen3.5:0.8b`) was not actually a valid local
+Ollama model on the dedicated instance, and real requests were silently
+falling back into failures against the Ollama Cloud account's own session
+usage limit — meaning `/chat` may have been unreliable under the old
+config independent of anything in this switch. Restored to the
+documented default (`gemma4:cloud`) as the `local`-mode fallback config
+even though production itself now runs `hosted`.
 
 ### Features
 
