@@ -235,7 +235,20 @@ case "${choice,,}" in
   *)
     set_env_var EMBEDDING_PROVIDER local
     NEED_OLLAMA=true
-    CURRENT_EMBED_MODEL="$(get_env_var EMBEDDING_MODEL mxbai-embed-large)"
+    # Queried via rules_mcp.settings.Settings, not a hardcoded string -- that
+    # module's own EMBEDDING_MODEL already does os.getenv("EMBEDDING_MODEL",
+    # "mxbai-embed-large"), so this correctly picks up an EMBEDDING_MODEL
+    # process env var (e.g. set by CI to override the default for a lighter
+    # test run) the same way CURRENT_LLM_MODEL picks up LLM_MODEL above via
+    # core_config.Config. A first version of this hardcoded the literal
+    # string "mxbai-embed-large" here instead -- silently ignoring any
+    # EMBEDDING_MODEL env var entirely, confirmed live: a CI job that set
+    # EMBEDDING_MODEL=all-minilm to keep ingestion fast still pulled and
+    # ingested with mxbai-embed-large (visible in the Ollama log: a ~700MB
+    # download and "general.name ... = mxbai-embed-large-v1", not the ~46MB
+    # all-minilm), pushing ingestion past run_bot.sh's own rules-mcp
+    # readiness timeout.
+    CURRENT_EMBED_MODEL="$(get_env_var EMBEDDING_MODEL "$(py 'from rules_mcp.settings import Settings; print(Settings.EMBEDDING_MODEL)' 2>/dev/null || echo mxbai-embed-large)")"
     if [[ "${INTERACTIVE}" == true ]]; then
       read -r -p "Ollama embedding model tag [${CURRENT_EMBED_MODEL}]: " model
       EMBED_MODEL="${model:-${CURRENT_EMBED_MODEL}}"
