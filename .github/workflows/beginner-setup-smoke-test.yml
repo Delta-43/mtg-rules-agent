@@ -40,13 +40,35 @@ on:
 jobs:
   local-model-smoke-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      # Started before Ollama/model setup so the two run concurrently instead
+      # of stacking serially -- a real first run found this workflow timing
+      # out at 900s with rules-mcp ingestion 87.5% done (35/40 batches),
+      # because building three images from scratch (base image pulls, pip
+      # install of the full chromadb/langchain/onnxruntime stack, npm
+      # install) alone ate a large chunk of that budget before ingestion
+      # even started. Building here, in parallel, means run_bot.sh's own
+      # `docker compose up -d --build` mostly reuses already-built layers.
+      #
+      # nohup + disown + a PID file, not a bare trailing "&": each `run:`
+      # step is its own separate shell process, so a plain background job
+      # started here would not be a child of the *later* step's shell that
+      # tries to `wait` on it -- `wait` only works within one shell's own
+      # job table. nohup/disown fully detach the process so it keeps
+      # running (reparented, not killed) once this step's shell exits; the
+      # later "Wait for the pre-build" step polls for the PID instead.
+      - name: Pre-build service images in the background (parallel with Ollama/model setup below)
+        run: |
+          nohup docker compose build rules-mcp scryfall-mcp searxng > prebuild.log 2>&1 &
+          disown
+          echo $! > prebuild.pid
 
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
@@ -78,16 +100,29 @@ jobs:
           EMBEDDING_MODEL: all-minilm
         run: ./setup.sh --non-interactive
 
+      - name: Wait for the pre-build to finish
+        run: |
+          pid="$(cat prebuild.pid)"
+          while kill -0 "${pid}" 2>/dev/null; do
+            sleep 2
+          done
+          tail -20 prebuild.log
+          # The backgrounded process's real exit code was lost once
+          # disowned -- re-running the same build synchronously here is a
+          # fast, fully-cached no-op if it already succeeded, and correctly
+          # surfaces a real failure (with a real exit code) if it didn't,
+          # rather than trusting an unretrieved background result.
+          docker compose build rules-mcp scryfall-mcp searxng
+
       - name: Bring up the stack and start the backend
         run: |
           ./run_bot.sh > run_bot.log 2>&1 &
           # rules-mcp's first-boot ingestion is documented to take ~8-10
-          # minutes on a 4-core reference host (see root CLAUDE.md); a
-          # GitHub-hosted runner's 2 cores plus the smaller all-minilm
-          # embedding model roughly offset each other, but this is generous
-          # on purpose -- a slow ingest isn't a failure, only a genuine hang
-          # or crash is.
-          for _ in $(seq 1 900); do
+          # minutes on a 4-core reference host (see root CLAUDE.md), and
+          # images are now pre-built above -- 1500s is real margin beyond
+          # that, not a fine-tuned edge. A slow-but-progressing ingest isn't
+          # a failure, only a genuine hang or crash is.
+          for _ in $(seq 1 1500); do
             curl -s http://localhost:8000/health >/dev/null 2>&1 && break
             sleep 1
           done
@@ -122,7 +157,7 @@ jobs:
   cloud-model-smoke-test:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check OLLAMA_API_KEY is configured
         id: check
@@ -143,6 +178,18 @@ jobs:
         if: steps.check.outputs.configured == 'true'
         with:
           python-version: "3.11"
+
+      # See local-model-smoke-test's identical step above for why this is a
+      # background build via nohup/disown/PID-file rather than a bare "&"
+      # -- the same real timeout failure applies here too (untested but
+      # this job uses the heavier mxbai-embed-large default, not
+      # all-minilm, so if anything it needs this more).
+      - name: Pre-build service images in the background (parallel with Ollama/model setup below)
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          nohup docker compose build rules-mcp scryfall-mcp searxng > prebuild.log 2>&1 &
+          disown
+          echo $! > prebuild.pid
 
       - name: Install Ollama
         if: steps.check.outputs.configured == 'true'
@@ -169,13 +216,28 @@ jobs:
         # default (gemma4:cloud) rather than a local stand-in.
         run: ./setup.sh --non-interactive
 
+      - name: Wait for the pre-build to finish
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          pid="$(cat prebuild.pid)"
+          while kill -0 "${pid}" 2>/dev/null; do
+            sleep 2
+          done
+          tail -20 prebuild.log
+          docker compose build rules-mcp scryfall-mcp searxng
+
       - name: Bring up the stack and start the backend
         if: steps.check.outputs.configured == 'true'
         env:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         run: |
           ./run_bot.sh > run_bot.log 2>&1 &
-          for _ in $(seq 1 900); do
+          # See local-model-smoke-test's identical step for why 1500s, not
+          # 900s -- a real first run of that job timed out at 900s with
+          # ingestion 87.5% done. This job's default embedding model
+          # (mxbai-embed-large) is heavier than that job's all-minilm, so
+          # if anything it needs at least as much margin.
+          for _ in $(seq 1 1500); do
             curl -s http://localhost:8000/health >/dev/null 2>&1 && break
             sleep 1
           done
