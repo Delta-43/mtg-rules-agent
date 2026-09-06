@@ -28,7 +28,12 @@ jobs:
           cache-dependency-path: server/scryfall_mcp/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # npm install, not npm ci: package-lock.json drifts from package.json
+        # here (it has before) -- the same reason scryfall_mcp/Dockerfile
+        # uses npm install too. npm ci hard-fails on any drift; npm install
+        # tolerates and repairs it. Verified live: npm ci fails on this exact
+        # repo state with "Missing: esbuild@... from lock file" et al.
+        run: npm install
 
       - name: Type-check
         run: npm run type-check
