@@ -12,11 +12,13 @@ module needs, and doesn't duplicate that.
 ## Layout
 
 - `app_api/` — FastAPI app, HTTP routes (`/chat`, `/chat/stream`,
-  `/health`), CORS, API-key auth, rate limiting.
+  `/health`, `/metrics`), CORS, API-key auth, rate limiting.
 - `llm_agent/` — the tool-calling agent (`agent.py`), the pluggable LLM
   factory (`llm_provider.py`), the in-process `web_search` tool.
 - `core_config/` — this module's own config loader (YAML-first,
   env-override) — reads `project_config.yml` in this same directory.
+  `metrics.py` holds shared Prometheus metric definitions (see
+  `docs/OBSERVABILITY_PLAN_V2.md`).
 - `accounts_db/` — SQLAlchemy models + Alembic migration for the future
   accounts/tiers/billing pivot (see root `docs/PLAN.md`). Not imported by
   `app_api` yet — Phase 0 scaffolding only.

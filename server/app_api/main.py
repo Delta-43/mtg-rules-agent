@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -21,6 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from core_config import Config
+from core_config.metrics import HTTP_STREAMING_TTFT_SECONDS
 from llm_agent import MTGJudgeAgent, build_agent
 from llm_agent.llm_provider import LLMConfigError
 
@@ -133,6 +136,18 @@ if Config.CORS_ALLOWED_ORIGINS:
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+instrumentator = Instrumentator(
+    should_group_status_codes=False,
+    # "^/$" anchors to the literal root path only. Instrumentator matches
+    # excluded_handlers with re.search, not an exact-path match -- an
+    # unanchored "/" matches every handler string, since every FastAPI path
+    # contains "/" ("/chat", "/chat/stream", ...), which would silently
+    # exclude everything from instrumentation, not just root. See
+    # docs/OBSERVABILITY_PLAN_V2.md section 1.2.
+    excluded_handlers=["/metrics", "/health", "^/$"],
+)
+instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
 
 class ChatRequest(BaseModel):
     query: str = Field(..., max_length=2000)
@@ -224,9 +239,14 @@ async def chat(request: Request, chat_request: ChatRequest):
 
 
 async def _sse_chat_events(user_query: str, thread_id: str):
+    start_time = time.perf_counter()
+    first_token_recorded = False
     try:
         async for kind, payload in judge_agent.stream_tokens(user_query, thread_id=thread_id):
             if kind == "token":
+                if not first_token_recorded:
+                    HTTP_STREAMING_TTFT_SECONDS.observe(time.perf_counter() - start_time)
+                    first_token_recorded = True
                 yield f"event: token\ndata: {json.dumps({'text': payload})}\n\n"
             elif kind == "error":
                 yield f"event: error\ndata: {json.dumps({'message': payload})}\n\n"

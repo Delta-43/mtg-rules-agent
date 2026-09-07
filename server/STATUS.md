@@ -18,7 +18,8 @@ developer/testers — can work on different surfaces without stepping on
 each other; see `.github/CODEOWNERS` for who reviews what.
 
 Overall project status: backend, web app, and Discord bot are all **live**.
-Accounts/tiers/billing is **planned, not started**; CI/CD is now **live** (see `.github/workflows/`). The web
+Accounts/tiers/billing is **planned, not started**; CI/CD is now **live** (see `.github/workflows/`). Observability
+(Prometheus metrics + SLO rules, opt-in `--profile monitoring`) is now **live** for the Crawl phase, per `docs/OBSERVABILITY_PLAN_V2.md`. The web
 app's visual redesign is **paused** pending a design direction.
 
 ## 📦 This module: server/
@@ -119,6 +120,12 @@ bottleneck again — just not faster today.
 - **CI** (`.github/workflows/server-ci.yml`) — `pytest` on every PR
   touching this module, plus Docker builds and import smoke tests for
   the `mtg-judge` and `rules-mcp` images.
+- **`GET /metrics`** (`prometheus-fastapi-instrumentator` + a purpose-built
+  `http_streaming_ttft_seconds` histogram in `core_config/metrics.py`) —
+  Crawl-phase observability per `docs/OBSERVABILITY_PLAN_V2.md`, scraped
+  by the opt-in `ops/monitoring/` Prometheus service. Per-tool-call
+  metrics (`agent_tool_calls_total`) are NOT part of this yet — scoped as
+  separate follow-up work; see `CLAUDE.md`.
 
 ### Remaining work
 
