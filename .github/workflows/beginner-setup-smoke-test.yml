@@ -228,25 +228,29 @@ jobs:
         if: steps.check.outputs.configured == 'true'
         run: curl -fsSL https://ollama.com/install.sh | sh
 
-      - name: Start Ollama, authenticated for cloud models
-        if: steps.check.outputs.configured == 'true'
-        env:
-          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-        run: |
-          ollama serve > ollama.log 2>&1 &
-          for _ in $(seq 1 30); do
-            curl -s http://localhost:11434/api/version >/dev/null 2>&1 && break
-            sleep 1
-          done
-          curl -s http://localhost:11434/api/version >/dev/null 2>&1 || {
-            echo "Ollama failed to start"; cat ollama.log; exit 1;
-          }
-
       - name: Run setup.sh non-interactively against the real defaults
         if: steps.check.outputs.configured == 'true'
         # No LLM_MODEL/EMBEDDING_MODEL override here -- this job exists
         # specifically to test project_config.yml's actual committed
         # default (gemma4:cloud) rather than a local stand-in.
+        #
+        # OLLAMA_API_KEY lives here, not in a separate earlier "start
+        # Ollama" step -- a first version of this workflow started and
+        # authenticated a throwaway `ollama serve` on the default port
+        # 11434 in its own step, then ran setup.sh with no env block at
+        # all. But setup.sh is what actually starts the real dedicated
+        # instance this project always uses (port 11435, via
+        # scripts/run_ollama.sh -- see root CLAUDE.md for why 11435, not
+        # 11434), as a background process of *this* step's shell. Nothing
+        # ever talks to 11434, and the 11435 instance was spawning
+        # unauthenticated -- `ollama pull gemma4:cloud` succeeded anyway
+        # (only fetches a small manifest), so the failure would only have
+        # surfaced later as a 401 at the "Ask a real rules question" step.
+        # Putting the key here means the backgrounded `ollama serve`
+        # (11435) inherits it directly, the same way any child process
+        # inherits its parent shell's environment.
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         run: ./setup.sh --non-interactive
 
       - name: Wait for the pre-build to finish
