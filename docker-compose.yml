@@ -239,6 +239,24 @@ services:
   prometheus:
     image: prom/prometheus:v2.50.0
     container_name: mtg-prometheus
+    # Overrides the image's default CMD entirely, so every default flag
+    # needs to be re-listed, not just retention (confirmed via `docker
+    # inspect prom/prometheus:v2.50.0` before adding this). Retention
+    # matters here specifically: the image's own built-in default is 15d
+    # when --storage.tsdb.retention.time is omitted, but
+    # ops/monitoring/prometheus/rules/slo_rules.yml's
+    # job:http_availability:ratio_rate30d rule computes rate(...[30d]) --
+    # at 15d retention that range can never span more than 15 days of
+    # actual samples, so the "30-day" availability SLI would silently
+    # reflect a ~15-day window instead (half the ~3.6h/30-day error budget
+    # docs/OBSERVABILITY_PLAN_V2.md documents for this SLO). 31d, not 30d,
+    # for a one-day margin against the exact boundary.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=31d"
     volumes:
       - ./ops/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/monitoring/prometheus/rules:/etc/prometheus/rules:ro
