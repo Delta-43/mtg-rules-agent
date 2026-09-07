@@ -321,16 +321,43 @@ docker-compose up --build
 Starts `mtg-judge`, `rules-mcp`, `scryfall-mcp`, `searxng`, and `caddy`.
 `caddy` serves the built PWA (`webapp/`) as static assets and
 reverse-proxies `/chat*`/`/health` to `mtg-judge` — one origin, no CORS
-configuration needed for the primary deploy. Only `caddy` publishes a
-public port; everything else is internal to the `mtg-network` Docker
-network (though `rules-mcp`/`scryfall-mcp`/`searxng` are also bound to
-`127.0.0.1` for the hybrid-dev workflow above).
+configuration needed for the primary deploy. `caddy` is the only service
+meant to be reachable off-host; `rules-mcp`/`scryfall-mcp`/`searxng` are
+loopback-only (`127.0.0.1`, for the hybrid-dev workflow above), and
+`mtg-judge` itself is now also published on loopback (`127.0.0.1:8000`,
+see below) for the webapp-free path.
 
 For a real domain with automatic TLS *and* a directly exposed port
 80/443, edit `Caddyfile` and replace the `:80` block with your domain. For
 a Cloudflare Tunnel instead (no port needs to be open at all), see below
 and leave `Caddyfile` on plain `:80`, since TLS terminates at Cloudflare's
 edge in that case.
+
+### Local, webapp-free (no `webapp/` build, no Node needed)
+
+`webapp/` is only pulled in because `caddy`'s image (`webapp/Dockerfile`)
+builds the PWA into it — nothing in `mtg-judge` itself depends on it.
+Skip both `caddy` and `webapp/` entirely and talk to the backend directly:
+
+```bash
+docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng
+curl http://127.0.0.1:8000/health
+```
+
+`mtg-judge` already serves its own zero-build dev test UI at `/` (the
+same one `run_bot.sh`'s hybrid workflow uses), plus `/chat`, `/chat/stream`,
+and `/metrics` — nothing else to stand up for local use. Naming services
+explicitly like this (rather than a bare `docker compose up`) is what
+keeps `caddy`/`webapp/` out of it; `caddy` has no profile, so it would
+otherwise still start (and still need to build `webapp/`) by default.
+
+If you want a reverse-proxy front door anyway (a real domain/TLS) without
+the PWA, `caddy-local` is the same idea as `caddy` but built from the bare
+`caddy:2` image with no `webapp/` dependency at all — add it to the
+service list above and see `Caddyfile.local`. Verified end-to-end this
+way: real `docker compose up -d --build` of exactly this service list,
+`/`, `/health`, and `/chat` all responding correctly both directly on
+`:8000` and through `caddy-local`.
 
 ### Cloudflare Tunnel (opt-in: `--profile tunnel`)
 

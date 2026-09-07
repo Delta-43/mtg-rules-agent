@@ -6,6 +6,15 @@ services:
   mtg-judge:
     build: ./server
     container_name: mtg-judge-chatbot
+    ports:
+      # Loopback-only, same convention as rules-mcp/scryfall-mcp/searxng
+      # below -- lets you hit the API (and its own zero-build dev test UI at
+      # `/`, see app_api/main.py's serve_index()) directly without webapp/
+      # or caddy at all, e.g. `docker compose up -d --build mtg-judge
+      # rules-mcp scryfall-mcp searxng`. Doesn't change the production
+      # Cloudflare Tunnel path -- that still only ever reaches this
+      # container through `caddy` on mtg-network, never this host port.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./server/project_config.yml:/app/project_config.yml:ro
       - ./data/conversations:/app/data/conversations
@@ -178,6 +187,48 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+
+  # Opt-in, webapp-free alternative to `caddy` above: a bare `caddy:2`
+  # image (no build, no webapp/ dependency at all) that just reverse-proxies
+  # every path to mtg-judge -- which already serves its own zero-build dev
+  # test UI at `/` (app_api/main.py's serve_index()) plus /chat*, /health,
+  # /metrics, so there's no static bundle to serve here. For a real
+  # domain/TLS in front of a webapp-free deployment; for pure loopback use
+  # skip this too and hit mtg-judge's own port mapping above directly.
+  #
+  # Not started by a plain `docker-compose up --build` -- that keeps
+  # bringing up the default `caddy` (and building webapp/) unchanged, same
+  # as today. To actually avoid webapp/ entirely, name services explicitly
+  # rather than just activating this profile, since an unprofiled service
+  # like `caddy` still starts by default regardless of which profiles are
+  # active:
+  #   docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng caddy-local
+  caddy-local:
+    image: caddy:2
+    container_name: mtg-caddy-local
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_local_data:/data
+      - caddy_local_config:/config
+    ports:
+      # Loopback-only by default (unlike the main `caddy` service's open
+      # 80/443) since this is explicitly the local-use path -- override to
+      # 0.0.0.0 in a docker-compose.override.yml if you actually want this
+      # reachable off-host (e.g. fronting it with a real domain/TLS).
+      # 8877, not 8080/8090/8100/3000/etc. -- this host alone had unrelated
+      # containers already squatting on both of the more obvious choices
+      # (found live), the same class of conflict docs/PLAN.md's "Local
+      # deployment notes" already documents for other services in this
+      # file; remap again here in your own docker-compose.override.yml if
+      # 8877 also collides on your host.
+      - "127.0.0.1:8877:80"
+    depends_on:
+      - mtg-judge
+    networks:
+      - mtg-network
+    restart: unless-stopped
+    profiles:
+      - local
 
   # Opt-in: `docker-compose --profile monitoring up`. Prometheus scraping
   # mtg-judge's and (when the `discord` profile is also active)
@@ -366,5 +417,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_local_data:
+  caddy_local_config:
   supabase_db_data:
   prometheus_data:

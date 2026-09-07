@@ -126,6 +126,16 @@ bottleneck again — just not faster today.
   by the opt-in `ops/monitoring/` Prometheus service. Per-tool-call
   metrics (`agent_tool_calls_total`) are NOT part of this yet — scoped as
   separate follow-up work; see `CLAUDE.md`.
+- **Reachable without `webapp/`** — `mtg-judge` now publishes
+  `127.0.0.1:8000` directly in `docker-compose.yml`, and a new
+  `caddy-local` service (bare `caddy:2`, no build) gives a proxy front
+  door with no dependency on `webapp/`'s Node build at all. `caddy`
+  (the main service, PWA baked in) is unchanged — this is additive, not a
+  replacement. See `docs/DESCRIPTION.md`'s "Local, webapp-free" section.
+  Verified live: `docker compose up -d --build mtg-judge rules-mcp
+  scryfall-mcp searxng [caddy-local]`, `/`, `/health`, `/metrics`, and
+  `/chat` all responded correctly both directly on `:8000` and proxied
+  through `caddy-local`.
 
 ### Remaining work
 

@@ -127,6 +127,14 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
   -d '{"query": "What happens during the untap step?"}'
 ```
 
+Want everything in Docker but still no `webapp/`/Node involved? `caddy`
+only pulls in `webapp/` to build the PWA into its image — skip both:
+`docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng`,
+then hit `http://localhost:8000` directly (its own dev test UI at `/`,
+plus `/chat`, `/chat/stream`, `/health`, `/metrics`). See
+`docs/DESCRIPTION.md`'s "Local, webapp-free" section for a proxy-fronted
+(`caddy-local`) variant of this too.
+
 For the full Docker deployment (public-facing, incl. Cloudflare Tunnel, R2
 backup, and the Discord bot), environment variables, troubleshooting, and
 the complete API reference, see **[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md)**.
