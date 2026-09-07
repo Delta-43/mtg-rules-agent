@@ -89,9 +89,13 @@ class Config:
     LLM_MODEL = _resolve(
         _CONFIG, "LLM_MODEL", ("models", "llm"), "gemma4:cloud"
     )
-    EMBEDDING_MODEL = _resolve(
-        _CONFIG, "EMBEDDING_MODEL", ("models", "embedding"), "mxbai-embed-large"
-    )
+    # No EMBEDDING_MODEL here -- rules_mcp/settings.py owns that value
+    # independently (it doesn't import core_config at all, by design -- see
+    # root CLAUDE.md). A duplicate copy used to live here too, read only by
+    # setup.sh to decide what to `ollama pull`; the two could drift since
+    # they were separate env reads that only coincidentally shared a
+    # default. setup.sh now imports rules_mcp.settings.Settings directly
+    # instead.
 
     LLM_REASONING = _resolve(
         _CONFIG, "LLM_REASONING", ("llm", "reasoning"), False, bool

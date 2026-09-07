@@ -1,0 +1,305 @@
+name: beginner setup smoke test
+
+# Exercises the actual "clone it and get running" path a new user hits --
+# ./setup.sh then ./run_bot.sh -- end to end on a real GitHub-hosted runner,
+# rather than just unit tests / image builds. Two separate jobs, deliberately
+# not one, because they have very different trust/cost profiles:
+#
+#   local-model-smoke-test: always runs, on any push/PR to main, no
+#     credentials needed. Proves the actual LLM_PROVIDER=local/
+#     EMBEDDING_PROVIDER=local code paths work end to end (Ollama install,
+#     serve, pull, rules-mcp ingestion, a real /chat call) using small, real,
+#     fully-local model tags instead of this repo's real default
+#     (gemma4:cloud) -- see that job's steps for why.
+#
+#   cloud-model-smoke-test: only runs on manual dispatch, and only if an
+#     OLLAMA_API_KEY secret has been configured (skips cleanly otherwise).
+#     This is the one that actually tests gemma4:cloud, the real default --
+#     but doing that requires authenticating against a real Ollama account
+#     (`ollama signin` itself is interactive-only, confirmed against the
+#     actual CLI -- no flags besides --help; OLLAMA_API_KEY from
+#     ollama.com/settings/keys is Ollama's own documented headless-auth path
+#     for automation instead), which draws down that account's real
+#     session/weekly quota. Deliberately not on push/pull_request: GitHub
+#     doesn't expose secrets to workflows triggered by a fork's PR anyway (a
+#     deliberate security boundary, not an oversight to work around), and a
+#     shared personal account's quota shouldn't be spent on every commit
+#     regardless.
+#
+# No `paths:` filter on the required job -- see compose-validate.yml's own
+# comment on why a required check needs to always run, not be skippable by
+# which files a PR happens to touch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  local-model-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Started before Ollama/model setup so the two run concurrently instead
+      # of stacking serially -- a real first run found this workflow timing
+      # out at 900s with rules-mcp ingestion 87.5% done (35/40 batches),
+      # because building three images from scratch (base image pulls, pip
+      # install of the full chromadb/langchain/onnxruntime stack, npm
+      # install) alone ate a large chunk of that budget before ingestion
+      # even started. Building here, in parallel, means run_bot.sh's own
+      # `docker compose up -d --build` mostly reuses already-built layers.
+      #
+      # nohup + disown + a PID file, not a bare trailing "&": each `run:`
+      # step is its own separate shell process, so a plain background job
+      # started here would not be a child of the *later* step's shell that
+      # tries to `wait` on it -- `wait` only works within one shell's own
+      # job table. nohup/disown fully detach the process so it keeps
+      # running (reparented, not killed) once this step's shell exits; the
+      # later "Wait for the pre-build" step polls for the PID instead.
+      - name: Pre-build service images in the background (parallel with Ollama/model setup below)
+        run: |
+          nohup docker compose build rules-mcp scryfall-mcp searxng > prebuild.log 2>&1 &
+          disown
+          echo $! > prebuild.pid
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama
+        run: |
+          ollama serve > ollama.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -s http://localhost:11434/api/version >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:11434/api/version >/dev/null 2>&1 || {
+            echo "Ollama failed to start"; cat ollama.log; exit 1;
+          }
+
+      - name: Run setup.sh non-interactively against small local models
+        env:
+          # Overrides project_config.yml's real default (gemma4:cloud /
+          # mxbai-embed-large) for this job only, via .env (setup.sh writes
+          # whatever LLM_MODEL/EMBEDDING_MODEL core_config already resolves
+          # to at the time it runs -- these env vars make that resolution
+          # pick up small local tags instead). This still exercises the
+          # exact same LLM_PROVIDER=local/EMBEDDING_PROVIDER=local code
+          # paths a real beginner hits by default -- only the specific tags
+          # differ, chosen to fit a GitHub-hosted runner's 7GB RAM and keep
+          # the job fast, and specifically to avoid needing Ollama cloud
+          # auth (see cloud-model-smoke-test below for that path instead).
+          #
+          # llama3.2:1b (an earlier version of this line) is real and pulls
+          # fine, but is too weak to reliably drive this agent's tool
+          # calling -- confirmed live: it returned a malformed pseudo-tool-call
+          # as plain answer text ({"name": "untap_step", "parameters": {...}})
+          # instead of actually invoking search_rules, so sources.rules came
+          # back empty and this job's own assertion correctly caught it.
+          # llama3.2:3b is Meta's next size up in the same family, with
+          # meaningfully more reliable real-world tool-calling behavior at a
+          # still-small ~2GB footprint -- well within a GitHub-hosted
+          # runner's 7GB RAM. (Not re-verified locally against this repo's
+          # real agent code before pushing this change: the dev host used for
+          # that earlier verification turned out to be memory-constrained --
+          # it's also running this project's live production stack -- and a
+          # background verification run of 3b was OOM-killed by the host
+          # itself. Continuing to run heavy local model tests there risked
+          # starving the real production containers of memory, so that
+          # approach was abandoned in favor of letting this workflow's own
+          # CI run, on a clean dedicated runner, be the real verification.)
+          LLM_MODEL: llama3.2:3b
+          EMBEDDING_MODEL: all-minilm
+        run: ./setup.sh --non-interactive
+
+      - name: Wait for the pre-build to finish
+        run: |
+          pid="$(cat prebuild.pid)"
+          while kill -0 "${pid}" 2>/dev/null; do
+            sleep 2
+          done
+          tail -20 prebuild.log
+          # The backgrounded process's real exit code was lost once
+          # disowned -- re-running the same build synchronously here is a
+          # fast, fully-cached no-op if it already succeeded, and correctly
+          # surfaces a real failure (with a real exit code) if it didn't,
+          # rather than trusting an unretrieved background result.
+          docker compose build rules-mcp scryfall-mcp searxng
+
+      - name: Bring up the stack and start the backend
+        run: |
+          ./run_bot.sh > run_bot.log 2>&1 &
+          # rules-mcp's first-boot ingestion is documented to take ~8-10
+          # minutes on a 4-core reference host (see root CLAUDE.md), and
+          # images are now pre-built above -- 1500s is real margin beyond
+          # that, not a fine-tuned edge. A slow-but-progressing ingest isn't
+          # a failure, only a genuine hang or crash is.
+          for _ in $(seq 1 1500); do
+            curl -s http://localhost:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:8000/health || {
+            echo "Backend never became healthy"; cat run_bot.log; exit 1;
+          }
+
+      - name: Ask a real rules question end-to-end
+        # Only asserts a real, well-formed answer came back -- deliberately
+        # NOT that sources.rules is populated (i.e. that search_rules was
+        # actually invoked). This job's job is proving the *mechanics* work
+        # (Ollama, ingestion, docker compose, the backend responding) with a
+        # small stand-in model, not that a deliberately shrunk model
+        # faithfully follows this agent's fairly long, detailed tool-calling
+        # system prompt -- that's a model-capability question, not a "does
+        # setup.sh -> run_bot.sh work" question, and requiring it here was
+        # too strict a bar. Confirmed live across two real small models:
+        # llama3.2:1b answered with a malformed pseudo-tool-call string
+        # instead of invoking search_rules at all (caught, correctly, by
+        # the old stricter assertion); llama3.2:3b gave a coherent,
+        # correct-reading plain-English answer but *also* skipped tool
+        # calling entirely, answering from its own training data instead --
+        # both are real small-model instruction-following limits, not
+        # pipeline bugs. cloud-model-smoke-test (the real gemma4:cloud
+        # default, a genuinely representative model) is the right place to
+        # hold citations to that stricter bar, and still does.
+        run: |
+          response=$(curl -s -X POST http://localhost:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"query": "What happens during the untap step?"}')
+          echo "${response}"
+          echo "${response}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          assert data.get('answer'), 'no answer field in the response'
+          print('OK: got a non-empty answer')
+          "
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "--- ollama.log ---"; cat ollama.log 2>/dev/null || true
+          echo "--- run_bot.log ---"; cat run_bot.log 2>/dev/null || true
+          docker compose logs || true
+
+  cloud-model-smoke-test:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check OLLAMA_API_KEY is configured
+        id: check
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          if [ -z "${OLLAMA_API_KEY}" ]; then
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::OLLAMA_API_KEY secret not set -- skipping the real gemma4:cloud smoke test. Add it under Settings > Secrets and variables > Actions (create the key at ollama.com/settings/keys) to enable this job."
+          else
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.configured == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.configured == 'true'
+        with:
+          python-version: "3.11"
+
+      # See local-model-smoke-test's identical step above for why this is a
+      # background build via nohup/disown/PID-file rather than a bare "&"
+      # -- the same real timeout failure applies here too (untested but
+      # this job uses the heavier mxbai-embed-large default, not
+      # all-minilm, so if anything it needs this more).
+      - name: Pre-build service images in the background (parallel with Ollama/model setup below)
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          nohup docker compose build rules-mcp scryfall-mcp searxng > prebuild.log 2>&1 &
+          disown
+          echo $! > prebuild.pid
+
+      - name: Install Ollama
+        if: steps.check.outputs.configured == 'true'
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Run setup.sh non-interactively against the real defaults
+        if: steps.check.outputs.configured == 'true'
+        # No LLM_MODEL/EMBEDDING_MODEL override here -- this job exists
+        # specifically to test project_config.yml's actual committed
+        # default (gemma4:cloud) rather than a local stand-in.
+        #
+        # OLLAMA_API_KEY lives here, not in a separate earlier "start
+        # Ollama" step -- a first version of this workflow started and
+        # authenticated a throwaway `ollama serve` on the default port
+        # 11434 in its own step, then ran setup.sh with no env block at
+        # all. But setup.sh is what actually starts the real dedicated
+        # instance this project always uses (port 11435, via
+        # scripts/run_ollama.sh -- see root CLAUDE.md for why 11435, not
+        # 11434), as a background process of *this* step's shell. Nothing
+        # ever talks to 11434, and the 11435 instance was spawning
+        # unauthenticated -- `ollama pull gemma4:cloud` succeeded anyway
+        # (only fetches a small manifest), so the failure would only have
+        # surfaced later as a 401 at the "Ask a real rules question" step.
+        # Putting the key here means the backgrounded `ollama serve`
+        # (11435) inherits it directly, the same way any child process
+        # inherits its parent shell's environment.
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: ./setup.sh --non-interactive
+
+      - name: Wait for the pre-build to finish
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          pid="$(cat prebuild.pid)"
+          while kill -0 "${pid}" 2>/dev/null; do
+            sleep 2
+          done
+          tail -20 prebuild.log
+          docker compose build rules-mcp scryfall-mcp searxng
+
+      - name: Bring up the stack and start the backend
+        if: steps.check.outputs.configured == 'true'
+        env:
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          ./run_bot.sh > run_bot.log 2>&1 &
+          # See local-model-smoke-test's identical step for why 1500s, not
+          # 900s -- a real first run of that job timed out at 900s with
+          # ingestion 87.5% done. This job's default embedding model
+          # (mxbai-embed-large) is heavier than that job's all-minilm, so
+          # if anything it needs at least as much margin.
+          for _ in $(seq 1 1500); do
+            curl -s http://localhost:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -s http://localhost:8000/health || {
+            echo "Backend never became healthy"; cat run_bot.log; exit 1;
+          }
+
+      - name: Ask a real rules question end-to-end
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          response=$(curl -s -X POST http://localhost:8000/chat \
+            -H "Content-Type: application/json" \
+            -d '{"query": "What happens during the untap step?"}')
+          echo "${response}"
+          echo "${response}" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          assert data.get('answer'), 'no answer field in the response'
+          assert data.get('sources', {}).get('rules'), 'no rule citations in sources'
+          print('OK: got an answer with', len(data['sources']['rules']), 'rule citation(s)')
+          "
+
+      - name: Dump logs on failure
+        if: failure() && steps.check.outputs.configured == 'true'
+        run: |
+          echo "--- ollama.log ---"; cat ollama.log 2>/dev/null || true
+          echo "--- run_bot.log ---"; cat run_bot.log 2>/dev/null || true
+          docker compose logs || true

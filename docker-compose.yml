@@ -19,6 +19,16 @@ services:
       # local instance); ignored in hosted (OpenRouter) mode.
       - OLLAMA_BASE_URL=http://host.docker.internal:11435
       - LLM_PROVIDER=${LLM_PROVIDER:-local}
+      # Same "documented but never forwarded" gap as OPENROUTER_BASE_URL
+      # below (found during the same review, not previously known): LLM_MODEL
+      # wasn't in this list at all, so a .env override was silently ignored
+      # under docker-compose and only project_config.yml's `models.llm` value
+      # ever applied. Not int-cast, so an empty override wouldn't crash
+      # config loading the way RATE_LIMIT_PER_MINUTE would -- but an empty
+      # model string would still reach ChatOllama and fail confusingly at
+      # first inference, so it gets the same real-default treatment as
+      # OPENROUTER_BASE_URL, not an empty `:-` fallback.
+      - LLM_MODEL=${LLM_MODEL:-gemma4:cloud}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # Same "documented but never forwarded" gap as RATE_LIMIT_PER_MINUTE/
       # DAILY_QUOTA_* below. OPENROUTER_MODEL is fine with an empty
@@ -99,6 +109,12 @@ services:
       # a blind `:-` fallback would crash config loading on an empty string
       # the same way the int-cast vars below would (it's int-cast too).
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
+      # Same gap as LLM_MODEL on mtg-judge above (found during the same
+      # review): not previously in this list at all, so a .env override of
+      # the local embedding model tag was silently ignored under
+      # docker-compose. Real default, not an empty `:-` fallback, for the
+      # same reason as OPENROUTER_MODEL/OPENROUTER_BASE_URL above.
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-mxbai-embed-large}
       - OPENROUTER_EMBEDDING_API_KEY=${OPENROUTER_EMBEDDING_API_KEY:-}
       - OPENROUTER_EMBEDDING_MODEL=${OPENROUTER_EMBEDDING_MODEL:-baai/bge-m3}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
