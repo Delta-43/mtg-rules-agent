@@ -96,7 +96,26 @@ jobs:
           # differ, chosen to fit a GitHub-hosted runner's 7GB RAM and keep
           # the job fast, and specifically to avoid needing Ollama cloud
           # auth (see cloud-model-smoke-test below for that path instead).
-          LLM_MODEL: llama3.2:1b
+          #
+          # llama3.2:1b (an earlier version of this line) is real and pulls
+          # fine, but is too weak to reliably drive this agent's tool
+          # calling -- confirmed live: it returned a malformed pseudo-tool-call
+          # as plain answer text ({"name": "untap_step", "parameters": {...}})
+          # instead of actually invoking search_rules, so sources.rules came
+          # back empty and this job's own assertion correctly caught it.
+          # llama3.2:3b is Meta's next size up in the same family, with
+          # meaningfully more reliable real-world tool-calling behavior at a
+          # still-small ~2GB footprint -- well within a GitHub-hosted
+          # runner's 7GB RAM. (Not re-verified locally against this repo's
+          # real agent code before pushing this change: the dev host used for
+          # that earlier verification turned out to be memory-constrained --
+          # it's also running this project's live production stack -- and a
+          # background verification run of 3b was OOM-killed by the host
+          # itself. Continuing to run heavy local model tests there risked
+          # starving the real production containers of memory, so that
+          # approach was abandoned in favor of letting this workflow's own
+          # CI run, on a clean dedicated runner, be the real verification.)
+          LLM_MODEL: llama3.2:3b
           EMBEDDING_MODEL: all-minilm
         run: ./setup.sh --non-interactive
 
