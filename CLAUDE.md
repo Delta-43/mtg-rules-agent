@@ -378,6 +378,39 @@ not project-specific scripting. This used to be a bigger axis of complexity
 (separate CPU/GPU launcher scripts) before the default model moved to a cloud
 model that doesn't need local GPU/CPU inference for chat at all.
 
+**`caddy` is the only service actually coupled to `webapp/`** — `mtg-judge`
+itself has zero dependency on it. `caddy`'s image (`webapp/Dockerfile`)
+multi-stage-builds the PWA and bakes it into the same Caddy image that
+reverse-proxies the API, which is why a plain `docker-compose up --build`
+always needs Node/`webapp/` even for someone who only wants the API. For a
+webapp-free local deployment: `mtg-judge` publishes `127.0.0.1:8000`
+directly (same loopback convention as `rules-mcp`/`scryfall-mcp`/`searxng`),
+and a separate opt-in `caddy-local` service (bare `caddy:2`, no build,
+`Caddyfile.local`) gives a reverse-proxy front door with no `webapp/`
+dependency at all, for anyone who still wants one (a real domain/TLS).
+Two things worth knowing if you touch this:
+- **Naming services explicitly on the CLI is what actually keeps `caddy`/
+  `webapp/` out of it** (`docker compose up -d --build mtg-judge rules-mcp
+  scryfall-mcp searxng [caddy-local]`), not activating the `local` profile
+  alone — `caddy` has no `profiles:` key, so it's a default service that
+  still starts (and still needs to build `webapp/`) regardless of which
+  `--profile` flags are active, unless you avoid naming it.
+- **`caddy-local`'s host port is 8877, loopback-only** — deliberately not
+  8080 or 8090, both of which turned out to already be taken by unrelated
+  containers on the host this was verified against (the same class of
+  per-host port conflict already documented for `searxng`/`scryfall-mcp`/
+  `caddy` in `docs/PLAN.md`'s "Local deployment notes" — remap again in
+  your own `docker-compose.override.yml` if 8877 also collides on yours).
+  Loopback-only by default (unlike the main `caddy` service's open
+  80/443) since this is explicitly the local-use path; override to
+  `0.0.0.0` in an override file if you actually want it reachable off-host.
+- This was chosen deliberately over forking a separate long-lived "local"
+  branch with `webapp/`/`discord_client/` stripped out (considered, then
+  rejected — it would diverge from `main` on every `server/` change,
+  needing manual cherry-picks forever to stay current). `discord_client/`
+  needed no equivalent fix — it was already fully opt-in via
+  `--profile discord`.
+
 **`discord_client/` is an independent, self-contained client** — a single
 `/judge` slash command that calls the public backend's `POST /chat` (never
 `/chat/stream`; coalescing streamed tokens into Discord message edits fights

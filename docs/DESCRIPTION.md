@@ -482,7 +482,7 @@ mtg_local_chatbot/
 ├── docs/                      # This file, FEATURES.md, PLAN.md, TODO.md, PUBLISHING_PLAN.md, WEBAPP_PLAN.md
 ├── data/                      # Runtime state only (gitignored)
 ├── setup.sh run_bot.sh stop_bot.sh
-├── docker-compose.yml Caddyfile
+├── docker-compose.yml Caddyfile Caddyfile.local
 ├── scripts/run_ollama.sh
 └── .github/CODEOWNERS
 ```

@@ -198,7 +198,7 @@ mtg_local_chatbot/
 ├── ops/               # R2 backup/restore, Prometheus monitoring (--profile monitoring)
 ├── shared/            # Cross-module brand assets & design reference
 ├── docs/              # Everything below — architecture, features, plans
-└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts/monitoring)
+└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts/monitoring/local)
 ```
 
 Every module has its own `README.md` (setup/run detail) and `STATUS.md`
