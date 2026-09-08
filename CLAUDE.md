@@ -276,6 +276,59 @@ while the real public path through the tunnel still works end-to-end.
 access) — this specific tightening is a host-local `docker-compose.override.yml`
 concern, not a change to the base compose file every deployment gets.
 
+**Observability (Crawl phase) is implemented per `docs/OBSERVABILITY_PLAN_V2.md`
+(Nacho Catrileo) — endpoints only, not per-tool-call metrics; that split
+is deliberate, not partial work left mid-stream.** `server/app_api/main.py`
+exposes `GET /metrics` via `prometheus-fastapi-instrumentator`;
+`discord_client/bot.py` runs a second, independent one on `:9100` via a
+plain `prometheus_client.start_http_server()`. A few things worth knowing
+before touching either:
+- **The exclusion-pattern anchor matters.** `Instrumentator`'s
+  `excluded_handlers` matches via `re.search`, not an exact-path match —
+  an unanchored `"/"` (meant to exclude just the literal root path) would
+  match *every* FastAPI path, since `"/chat"`/`"/chat/stream"`/etc. all
+  contain `"/"`, silently zeroing `http_requests_total` for all real
+  traffic while `/metrics` itself still looks fine on a quick check. Use
+  `"^/$"`, not `"/"`, in that list — this exact regression is what
+  `server/tests/test_metrics.py`'s anchored-regex test guards against, and
+  is why V1 of the observability plan got superseded by V2 in the first
+  place (verified directly against the instrumentator's middleware
+  source, not assumed).
+- **`http_streaming_ttft_seconds` (`core_config/metrics.py`), not the
+  default `http_request_duration_seconds`, is the real perceived-latency
+  metric for `/chat/stream`.** The default histogram times the entire SSE
+  connection lifetime for a streaming route, not "time to respond" in any
+  useful sense — don't read `http_request_duration_seconds{handler="/chat/stream"}`
+  as a normal latency number later.
+- **`discord-bot` is attached to `mtg-network` now, but only for this.**
+  Its own design (see "`discord_client/` is an independent, self-contained
+  client" below) deliberately keeps it off that network and pointed at the
+  backend's public URL so it works identically colocated or run elsewhere
+  entirely — the network attachment here is scoped narrowly (Prometheus
+  scraping `discord-bot:9100` by Docker DNS when colocated) and doesn't
+  touch how it actually calls the API. This is a deliberate, narrow
+  reversal of that design, not a silent one — flagged as needing sign-off
+  from whoever owns the original decision (see `docs/TODO.md`), not
+  assumed settled just because it's implemented.
+- **Per-tool-call metrics (`agent_tool_calls_total`/`agent_tool_duration_seconds`,
+  a `ToolMetricsCallback` on `llm_agent/agent.py`'s two `config`-building
+  call sites) are NOT implemented.** This isn't an oversight — it's the
+  one piece of the V2 plan its own verification section flags as checked
+  against `langchain-core`'s callback *signatures* in isolation, never run
+  against a live `agent.astream()`. Scoped as separate follow-up work.
+  `ops/monitoring/prometheus/rules/slo_rules.yml`'s `HighToolFailureRate`
+  alert already exists and will start working the moment that metric is
+  emitted — it's inert (no data), not broken, until then. Don't add tool
+  metrics by mutating tool instances directly if you do pick this up —
+  `langchain-mcp-adapters` tools are Pydantic `BaseTool` instances, which
+  reject arbitrary attribute assignment (`tool.ainvoke = wrapped` raises
+  `ValueError`, confirmed directly against this repo's installed
+  `langchain-core`); a callback passed via `config["callbacks"]` is the
+  approach that actually works here, not a per-tool wrapper.
+- `Caddyfile`'s `@api` matcher never lists `/metrics`, so it already 404s
+  through the public path with zero Caddy changes — don't add a Caddy rule
+  "just to be safe," there's nothing to fix there.
+
 **LLM provider is pluggable**: `llm_provider.build_chat_model()` returns either
 `ChatOllama` (`LLM_PROVIDER=local`) or `ChatOpenAI` pointed at OpenRouter
 (`LLM_PROVIDER=hosted`). The default model, `gemma4:cloud`, is an **Ollama cloud

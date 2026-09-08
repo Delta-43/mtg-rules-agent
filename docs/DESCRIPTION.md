@@ -122,8 +122,9 @@ see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
 - **`webapp/`** (status: [`STATUS.md`](../webapp/STATUS.md)) — React +
   Vite PWA, built into the `caddy` image and served same-origin with the API.
 - **`ops/`** (status: [`STATUS.md`](../ops/STATUS.md)) — R2 backup/restore
-  scripts with their own lightweight image (no LangChain dependency);
-  future home for monitoring/alerting config.
+  scripts with their own lightweight image (no LangChain dependency), plus
+  `monitoring/` — Prometheus scrape config + SLO recording rules/alert
+  (opt-in `--profile monitoring`), per `docs/OBSERVABILITY_PLAN_V2.md`.
 - **`shared/`** (status: [`STATUS.md`](../shared/STATUS.md)) —
   cross-module committed source assets (brand art, design
   reference) — deliberately not inside `data/`, which is gitignored
@@ -218,6 +219,12 @@ Key implementation files:
 - `POST /chat/stream` — same request body, Server-Sent Events response
   (`event: token` repeated, one `event: sources`, then `event: done` or
   `event: error`).
+- `GET /metrics` — Prometheus-format metrics (`prometheus-fastapi-instrumentator`
+  plus a purpose-built `http_streaming_ttft_seconds` histogram for
+  `/chat/stream`'s time-to-first-token); not exposed through the public
+  Caddy path (`Caddyfile`'s `@api` matcher never lists it), loopback/
+  `mtg-network` only. See §6's Monitoring section and
+  `docs/OBSERVABILITY_PLAN_V2.md`.
 - Lifespan startup builds the agent once (constructs the MCP client,
   loads tools, builds the chat model) and fails fast if
   `LLM_PROVIDER=hosted` without an API key.
@@ -371,10 +378,30 @@ Profiles combine: `docker-compose --profile tunnel --profile backup up -d --buil
 2. Set `DISCORD_BOT_TOKEN` and a dedicated `DISCORD_API_KEY` in `.env`.
 3. `docker-compose --profile discord up -d --build discord-bot`
 
-Not attached to `mtg-network` — it only needs outbound access to
-Discord's gateway and to the backend's public URL, same as any other
-external client. Full setup/branding detail in
+Attached to `mtg-network` as of the observability pass below — but only
+for Prometheus to reach its `:9100/metrics` endpoint by Docker DNS when
+colocated on this host; its actual API calls still go to the backend's
+public URL unchanged, so this doesn't reintroduce a functional
+Docker-internal-DNS dependency. Full setup/branding detail in
 [`discord_client/README.md`](../discord_client/README.md).
+
+### Monitoring (opt-in: `--profile monitoring`)
+
+A self-hosted Prometheus (per `docs/OBSERVABILITY_PLAN_V2.md`'s Crawl
+phase), scraping `mtg-judge:8000/metrics` and, when the `discord` profile
+is also active, `discord-bot:9100/metrics`:
+
+```bash
+docker-compose --profile monitoring up -d
+```
+
+Loads `ops/monitoring/prometheus/rules/slo_rules.yml`'s four SLO recording
+rules/alert automatically. Bound to `127.0.0.1:9090` — not exposed through
+Caddy. `HighToolFailureRate` depends on `agent_tool_calls_total`, which
+isn't emitted yet (per-tool-call instrumentation is scoped as separate
+follow-up work — see `CLAUDE.md`), so that one alert stays inert (no data)
+until that metric lands. Profiles combine with the others above, e.g.
+`docker-compose --profile monitoring --profile discord up -d --build`.
 
 ---
 
@@ -423,7 +450,7 @@ mtg_local_chatbot/
 │   └── Dockerfile requirements.txt project_config.yml
 ├── discord_client/           # discord.py bot client -- see discord_client/README.md + STATUS.md
 ├── webapp/                   # React + Vite PWA -- see webapp/README.md + STATUS.md
-├── ops/                       # R2 backup/restore + future monitoring -- see ops/README.md + STATUS.md
+├── ops/                       # R2 backup/restore + monitoring/ (Prometheus) -- see ops/README.md + STATUS.md
 ├── shared/                    # Cross-module source assets -- see shared/README.md + STATUS.md
 ├── docs/                      # This file, FEATURES.md, PLAN.md, TODO.md, PUBLISHING_PLAN.md, WEBAPP_PLAN.md
 ├── data/                      # Runtime state only (gitignored)

@@ -187,10 +187,10 @@ mtg_local_chatbot/
 ├── server/            # Backend: FastAPI, the agent, rules-mcp, scryfall-mcp
 ├── discord_client/    # Discord bot ("Azor, High Arbiter")
 ├── webapp/            # React + Vite PWA
-├── ops/               # R2 backup/restore, future monitoring
+├── ops/               # R2 backup/restore, Prometheus monitoring (--profile monitoring)
 ├── shared/            # Cross-module brand assets & design reference
 ├── docs/              # Everything below — architecture, features, plans
-└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts)
+└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts/monitoring)
 ```
 
 Every module has its own `README.md` (setup/run detail) and `STATUS.md`

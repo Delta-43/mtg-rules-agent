@@ -179,6 +179,45 @@ services:
       - mtg-network
     restart: unless-stopped
 
+  # Opt-in: `docker-compose --profile monitoring up`. Prometheus scraping
+  # mtg-judge's and (when the `discord` profile is also active)
+  # discord-bot's /metrics endpoints, plus the SLO recording rules/alert in
+  # ops/monitoring/prometheus/rules/. See docs/OBSERVABILITY_PLAN_V2.md.
+  # No extra_hosts/host.docker.internal needed -- both scrape targets are
+  # reachable by Docker-internal DNS on mtg-network.
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: mtg-prometheus
+    # Overrides the image's default CMD entirely, so every default flag
+    # needs to be re-listed, not just retention (confirmed via `docker
+    # inspect prom/prometheus:v2.50.0` before adding this). Retention
+    # matters here specifically: the image's own built-in default is 15d
+    # when --storage.tsdb.retention.time is omitted, but
+    # ops/monitoring/prometheus/rules/slo_rules.yml's
+    # job:http_availability:ratio_rate30d rule computes rate(...[30d]) --
+    # at 15d retention that range can never span more than 15 days of
+    # actual samples, so the "30-day" availability SLI would silently
+    # reflect a ~15-day window instead (half the ~3.6h/30-day error budget
+    # docs/OBSERVABILITY_PLAN_V2.md documents for this SLO). 31d, not 30d,
+    # for a one-day margin against the exact boundary.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=31d"
+    volumes:
+      - ./ops/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - mtg-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
   # Opt-in: `docker-compose --profile tunnel up`. Connects this deployment to
   # a Cloudflare Tunnel so it's reachable at your domain (e.g.
   # azor.delta43.net) with TLS terminated at Cloudflare's edge -- no public
@@ -264,6 +303,16 @@ services:
       - ALLOWED_CHANNEL_IDS=${DISCORD_ALLOWED_CHANNEL_IDS:-}
       - COOLDOWN_SECONDS=${DISCORD_COOLDOWN_SECONDS:-10}
     restart: unless-stopped
+    # Added for Prometheus scraping only (see ops/monitoring/prometheus/prometheus.yml)
+    # -- the bot's actual API calls still go to the public API_BASE_URL
+    # above, unchanged, so this doesn't reintroduce a Docker-DNS dependency
+    # for anything functional, only for metrics when colocated on this host.
+    # A deliberate, narrow exception to this service's "not on mtg-network"
+    # design (see root CLAUDE.md) -- see docs/OBSERVABILITY_PLAN_V2.md
+    # section 1.3/5 for the reasoning and the open question for whoever owns
+    # that original decision.
+    networks:
+      - mtg-network
     profiles:
       - discord
 
@@ -336,3 +385,4 @@ volumes:
   caddy_data:
   caddy_config:
   supabase_db_data:
+  prometheus_data:
