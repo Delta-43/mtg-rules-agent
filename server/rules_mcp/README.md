@@ -24,6 +24,18 @@ so it can be lifted into its own repository unchanged.
   not semantic search. Used to independently verify a specific rule number
   actually exists before citing it (see the main repo's `CLAUDE.md` for why
   this exists and why `search_rules` isn't reliable for that job).
+- `get_rules_chapter(chapter)` — exact fetch of an entire chapter (e.g.
+  `"122"` for Counters), every rule in it, no similarity ranking at all.
+  For "framework" rules questions (how counters/replacement effects/
+  layers/state-based actions work in general) where `search_rules` can
+  fail to surface the governing rule because it's worded too abstractly to
+  match a specific-card-phrased query — confirmed live: rule 122.6 never
+  surfaced for any natural phrasing of a real Doubling Season question,
+  ranking 974th of 1172 rules by embedding similarity. See the main repo's
+  `CLAUDE.md`/`server/STATUS.md` for the full writeup, including
+  `llm_agent/agent.py`'s deterministic `FRAMEWORK_CHAPTER_TRIGGERS`, which
+  pre-seeds a call to this tool for questions matching a known keyword
+  list, ahead of the model's own reasoning.
 
 ## Transport
 
