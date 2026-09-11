@@ -22,7 +22,7 @@ jobs:
         # DAILY_QUOTA_*/OPENROUTER_BASE_URL were documented as env-overridable but
         # silently weren't under docker-compose, because the variable was never
         # forwarded into a service's `environment:` block at all -- see CLAUDE.md.
-        run: docker compose --profile tunnel --profile backup --profile discord --profile accounts config
+        run: docker compose --profile tunnel --profile backup --profile discord --profile accounts --profile monitoring --profile local config
 
   compose-build:
     runs-on: ubuntu-latest

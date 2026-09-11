@@ -92,6 +92,44 @@ def get_rule_by_id(rule_id: str) -> str:
     return f"[{rule_id}] " + "\n".join(documents)
 
 
+@mcp.tool()
+def get_rules_chapter(chapter: str) -> str:
+    """Look up the complete text of an entire Magic: The Gathering Comprehensive
+    Rules chapter by its number (e.g. "122" for Counters, "614" for Replacement
+    Effects) -- every rule in that chapter, not a semantic search.
+
+    Use this for "framework" rules questions -- how counters, replacement
+    effects, layers/continuous effects, or state-based actions work in
+    general -- rather than search_rules. These chapters are worded abstractly
+    (they don't mention specific cards, keywords, or permanent types), so a
+    card-specific search_rules query often fails to surface the one rule that
+    actually resolves the interaction even though it's the governing rule.
+    Confirmed live: for "does a planeswalker's ETB loyalty count as counters
+    put on it for Doubling Season's replacement effect," search_rules never
+    surfaces rule 122.6 (the rule that answers this) for any natural phrasing
+    of the question -- it ranks near the bottom of the entire 1172-rule index
+    by embedding similarity, despite being the rule that matters. Chapters are
+    small (single digits to ~30 rules), so fetching the whole thing is cheap
+    and, unlike a ranked top-k search, is guaranteed to include every rule in
+    it regardless of how oddly one specific rule's wording happens to embed.
+
+    Args:
+        chapter: Exact chapter number, e.g. "122" (not a full rule number like
+            "122.6" -- use get_rule_by_id for a single rule).
+    """
+    result = _get_vector_store().get(where={"section_id": chapter})
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    if not documents:
+        return f"No chapter found with number '{chapter}'."
+
+    by_rule: dict[str, list[str]] = {}
+    for doc, meta in zip(documents, metadatas):
+        by_rule.setdefault(meta["rule_id"], []).append(doc)
+    parts = [f"[{rule_id}] " + "\n".join(chunks) for rule_id, chunks in sorted(by_rule.items())]
+    return "\n\n".join(parts)
+
+
 def _index_is_empty() -> bool:
     # Checked via the ingest-complete marker file rather than by opening a Chroma
     # client: chromadb caches system state per persist_directory within a

@@ -6,6 +6,15 @@ services:
   mtg-judge:
     build: ./server
     container_name: mtg-judge-chatbot
+    ports:
+      # Loopback-only, same convention as rules-mcp/scryfall-mcp/searxng
+      # below -- lets you hit the API (and its own zero-build dev test UI at
+      # `/`, see app_api/main.py's serve_index()) directly without webapp/
+      # or caddy at all, e.g. `docker compose up -d --build mtg-judge
+      # rules-mcp scryfall-mcp searxng`. Doesn't change the production
+      # Cloudflare Tunnel path -- that still only ever reaches this
+      # container through `caddy` on mtg-network, never this host port.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./server/project_config.yml:/app/project_config.yml:ro
       - ./data/conversations:/app/data/conversations
@@ -73,6 +82,14 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+    healthcheck:
+      # No curl/wget in this image -- python3 (already required by the app) is
+      # the only HTTP client available.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -123,6 +140,13 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+    healthcheck:
+      # No curl/wget in this image -- python3 is the only HTTP client available.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   scryfall-mcp:
     build: ./server/scryfall_mcp
@@ -136,6 +160,13 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+    healthcheck:
+      # Node image, no curl/wget -- use node's own http client instead.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   searxng:
     image: searxng/searxng:latest
@@ -155,6 +186,12 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   caddy:
     build:
@@ -178,6 +215,56 @@ services:
     networks:
       - mtg-network
     restart: unless-stopped
+    healthcheck:
+      # /health is proxied straight through to mtg-judge, so this also
+      # confirms the backend behind Caddy is reachable, not just Caddy itself.
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Opt-in, webapp-free alternative to `caddy` above: a bare `caddy:2`
+  # image (no build, no webapp/ dependency at all) that just reverse-proxies
+  # every path to mtg-judge -- which already serves its own zero-build dev
+  # test UI at `/` (app_api/main.py's serve_index()) plus /chat*, /health,
+  # /metrics, so there's no static bundle to serve here. For a real
+  # domain/TLS in front of a webapp-free deployment; for pure loopback use
+  # skip this too and hit mtg-judge's own port mapping above directly.
+  #
+  # Not started by a plain `docker-compose up --build` -- that keeps
+  # bringing up the default `caddy` (and building webapp/) unchanged, same
+  # as today. To actually avoid webapp/ entirely, name services explicitly
+  # rather than just activating this profile, since an unprofiled service
+  # like `caddy` still starts by default regardless of which profiles are
+  # active:
+  #   docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng caddy-local
+  caddy-local:
+    image: caddy:2
+    container_name: mtg-caddy-local
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_local_data:/data
+      - caddy_local_config:/config
+    ports:
+      # Loopback-only by default (unlike the main `caddy` service's open
+      # 80/443) since this is explicitly the local-use path -- override to
+      # 0.0.0.0 in a docker-compose.override.yml if you actually want this
+      # reachable off-host (e.g. fronting it with a real domain/TLS).
+      # 8877, not 8080/8090/8100/3000/etc. -- this host alone had unrelated
+      # containers already squatting on both of the more obvious choices
+      # (found live), the same class of conflict docs/PLAN.md's "Local
+      # deployment notes" already documents for other services in this
+      # file; remap again here in your own docker-compose.override.yml if
+      # 8877 also collides on your host.
+      - "127.0.0.1:8877:80"
+    depends_on:
+      - mtg-judge
+    networks:
+      - mtg-network
+    restart: unless-stopped
+    profiles:
+      - local
 
   # Opt-in: `docker-compose --profile monitoring up`. Prometheus scraping
   # mtg-judge's and (when the `discord` profile is also active)
@@ -243,6 +330,18 @@ services:
     # `docker-compose up` for everyone not using the tunnel profile.
     # cloudflared fails fast with its own clear error if this is empty.
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    environment:
+      # Loopback-only, fixed port -- matches the same convention (and the
+      # same reasoning: network_mode: host would otherwise expose this on
+      # every interface) as ~/.docker_configs/cloudflared/compose.yml's
+      # tunnels, which already claim ports 20241-20245 on this host.
+      - TUNNEL_METRICS=127.0.0.1:20246
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20246", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       - caddy
     restart: unless-stopped
@@ -303,6 +402,16 @@ services:
       - ALLOWED_CHANNEL_IDS=${DISCORD_ALLOWED_CHANNEL_IDS:-}
       - COOLDOWN_SECONDS=${DISCORD_COOLDOWN_SECONDS:-10}
     restart: unless-stopped
+    healthcheck:
+      # No curl/wget in this image -- python3 is the only HTTP client
+      # available. Probes the Prometheus metrics server (see bot.py's
+      # start_http_server(port=9100)) as a liveness signal, since the bot
+      # itself has no other server to check.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/metrics', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     # Added for Prometheus scraping only (see ops/monitoring/prometheus/prometheus.yml)
     # -- the bot's actual API calls still go to the public API_BASE_URL
     # above, unchanged, so this doesn't reintroduce a Docker-DNS dependency
@@ -384,5 +493,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_local_data:
+  caddy_local_config:
   supabase_db_data:
   prometheus_data:

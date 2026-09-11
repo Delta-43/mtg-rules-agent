@@ -69,16 +69,19 @@ Two operational phases:
    automatically on container boot): download and parse the MTG rules PDF
    into hierarchical JSON, then chunk and embed it into ChromaDB.
 2. **Online serving**: accept a chat query; the agent decides which
-   tool(s) to call — `search_rules`, one or more of `scryfall-mcp`'s 16
-   tools (including `get_card_rulings`), and/or `web_search` — calling
-   more than one in sequence based on what earlier results return; produce
-   a final answer with a required citation block built from the tool
-   calls actually made, not a hand-set flag.
+   tool(s) to call — `search_rules`, `get_rules_chapter` (a deterministic
+   full-chapter fetch pre-seeded for questions matching
+   `FRAMEWORK_CHAPTER_TRIGGERS`, e.g. counters/replacement effects/state-
+   based actions — see `CLAUDE.md`/`server/STATUS.md`), one or more of
+   `scryfall-mcp`'s 16 tools (including `get_card_rulings`), and/or
+   `web_search` — calling more than one in sequence based on what earlier
+   results return; produce a final answer with a required citation block
+   built from the tool calls actually made, not a hand-set flag.
 
 ```text
 Client (webapp/ PWA, discord_client/ bot) -> Caddy -> FastAPI (server/app_api/main.py)
                                                     -> tool-calling agent (server/llm_agent/agent.py)
-                                                       |-- rules-mcp (MCP, HTTP): search_rules, get_rule_by_id
+                                                       |-- rules-mcp (MCP, HTTP): search_rules, get_rule_by_id, get_rules_chapter
                                                        |-- scryfall-mcp (MCP, HTTP): search_cards, get_card, get_card_rulings, ...
                                                        `-- web_search (in-process @tool: SearXNG + trafilatura)
 ```
@@ -105,7 +108,7 @@ see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
     see `docs/PLAN.md`).
   - `rules_mcp/` — standalone MCP server: rules PDF acquisition,
     hierarchical parsing, ChromaDB ingestion, `search_rules`/
-    `get_rule_by_id` tools. Self-contained; own
+    `get_rule_by_id`/`get_rules_chapter` tools. Self-contained; own
     [README](../server/rules_mcp/README.md).
   - `scryfall_mcp/` — a local fork of
     [bmurdock/scryfall-mcp](https://github.com/bmurdock/scryfall-mcp)
@@ -251,9 +254,15 @@ Key implementation files:
   chapter/section/rule/subrule hierarchy into JSON.
 - `ingestor.py` — chunks and embeds the parsed rules into ChromaDB,
   incrementally (only re-embeds rules whose content hash changed).
-- `server.py` — exposes `search_rules`/`get_rule_by_id` as MCP tools over
-  Streamable HTTP, plus a `/health` route; re-ingests automatically on
-  boot only when the rules PDF changed or a marker file is missing.
+- `server.py` — exposes `search_rules`/`get_rule_by_id`/`get_rules_chapter`
+  as MCP tools over Streamable HTTP, plus a `/health` route; re-ingests
+  automatically on boot only when the rules PDF changed or a marker file
+  is missing. `get_rules_chapter` is a deterministic full-chapter fetch
+  (no similarity ranking) used both directly by the model and pre-seeded
+  automatically for questions matching `agent.py`'s
+  `FRAMEWORK_CHAPTER_TRIGGERS` — see `CLAUDE.md` for why `search_rules`
+  alone can't reliably answer questions that hinge on abstractly-worded
+  framework rules (counters, replacement effects, state-based actions).
 
 Full detail (embedding provider switching, ingestion concurrency,
 migration gotchas) in [`server/rules_mcp/README.md`](../server/rules_mcp/README.md)
@@ -292,9 +301,11 @@ Discord bot section; current status in
 React + Vite PWA, SSE streaming chat UI, `conversation_id` persisted
 client-side for multi-turn continuity. Same-origin deploy by default (no
 CORS needed). Full detail in
-[`webapp/README.md`](../webapp/README.md); the in-progress visual redesign
-is tracked in `docs/WEBAPP_PLAN.md`; current status in
-[`webapp/STATUS.md`](../webapp/STATUS.md).
+[`webapp/README.md`](../webapp/README.md); the visual redesign (a light
+"paper lightbox" theme) shipped 2026-09-09 — see
+[`webapp/STATUS.md`](../webapp/STATUS.md) for what's live, and
+`docs/WEBAPP_PLAN.md` (superseded) for the original plan's historical
+context only.
 
 ---
 
@@ -321,16 +332,43 @@ docker-compose up --build
 Starts `mtg-judge`, `rules-mcp`, `scryfall-mcp`, `searxng`, and `caddy`.
 `caddy` serves the built PWA (`webapp/`) as static assets and
 reverse-proxies `/chat*`/`/health` to `mtg-judge` — one origin, no CORS
-configuration needed for the primary deploy. Only `caddy` publishes a
-public port; everything else is internal to the `mtg-network` Docker
-network (though `rules-mcp`/`scryfall-mcp`/`searxng` are also bound to
-`127.0.0.1` for the hybrid-dev workflow above).
+configuration needed for the primary deploy. `caddy` is the only service
+meant to be reachable off-host; `rules-mcp`/`scryfall-mcp`/`searxng` are
+loopback-only (`127.0.0.1`, for the hybrid-dev workflow above), and
+`mtg-judge` itself is now also published on loopback (`127.0.0.1:8000`,
+see below) for the webapp-free path.
 
 For a real domain with automatic TLS *and* a directly exposed port
 80/443, edit `Caddyfile` and replace the `:80` block with your domain. For
 a Cloudflare Tunnel instead (no port needs to be open at all), see below
 and leave `Caddyfile` on plain `:80`, since TLS terminates at Cloudflare's
 edge in that case.
+
+### Local, webapp-free (no `webapp/` build, no Node needed)
+
+`webapp/` is only pulled in because `caddy`'s image (`webapp/Dockerfile`)
+builds the PWA into it — nothing in `mtg-judge` itself depends on it.
+Skip both `caddy` and `webapp/` entirely and talk to the backend directly:
+
+```bash
+docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng
+curl http://127.0.0.1:8000/health
+```
+
+`mtg-judge` already serves its own zero-build dev test UI at `/` (the
+same one `run_bot.sh`'s hybrid workflow uses), plus `/chat`, `/chat/stream`,
+and `/metrics` — nothing else to stand up for local use. Naming services
+explicitly like this (rather than a bare `docker compose up`) is what
+keeps `caddy`/`webapp/` out of it; `caddy` has no profile, so it would
+otherwise still start (and still need to build `webapp/`) by default.
+
+If you want a reverse-proxy front door anyway (a real domain/TLS) without
+the PWA, `caddy-local` is the same idea as `caddy` but built from the bare
+`caddy:2` image with no `webapp/` dependency at all — add it to the
+service list above and see `Caddyfile.local`. Verified end-to-end this
+way: real `docker compose up -d --build` of exactly this service list,
+`/`, `/health`, and `/chat` all responding correctly both directly on
+`:8000` and through `caddy-local`.
 
 ### Cloudflare Tunnel (opt-in: `--profile tunnel`)
 
@@ -455,7 +493,7 @@ mtg_local_chatbot/
 ├── docs/                      # This file, FEATURES.md, PLAN.md, TODO.md, PUBLISHING_PLAN.md, WEBAPP_PLAN.md
 ├── data/                      # Runtime state only (gitignored)
 ├── setup.sh run_bot.sh stop_bot.sh
-├── docker-compose.yml Caddyfile
+├── docker-compose.yml Caddyfile Caddyfile.local
 ├── scripts/run_ollama.sh
 └── .github/CODEOWNERS
 ```
@@ -522,15 +560,11 @@ offload (e.g. `OLLAMA_VULKAN=0` for the Vulkan backend).
 
 ## 11. Known limitations (current, not historical)
 
-- No CI/CD yet — verification is functional (running the real stack), not
-  automated on every PR. Scoped as Stage 0 in `docs/PUBLISHING_PLAN.md`.
 - Tool-calling reliability with smaller/local (non-cloud) models is a
   known tradeoff of model choice, not something a code fix addresses.
 - SearXNG's outbound IP can get rate-limited by upstream search engines
   under sustained traffic — best-effort, no mitigation in place.
 - Accounts/tiers/billing (Phase 1 onward) hasn't started beyond Phase 0
   scaffolding — see `docs/PLAN.md`.
-- The web app's visual redesign (Bun + `mana-font`) is paused pending a
-  design direction — see `docs/WEBAPP_PLAN.md`.
 - Anonymous-tier abuse mitigation (CAPTCHA/Turnstile) is deferred by
   design until it's actually needed.

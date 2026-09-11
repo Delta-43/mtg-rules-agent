@@ -1,5 +1,6 @@
 import logging
 import re
+import uuid
 from typing import Any
 
 from langchain.agents import create_agent
@@ -88,7 +89,15 @@ JUDGE_SYSTEM_PROMPT = (
     "confident it's correct. If you recall a specific rule number but "
     "search_rules didn't return it, call get_rule_by_id with that exact "
     "number to confirm it's real before citing it -- if it doesn't exist, "
-    "don't cite it.\n\n"
+    "don't cite it.\n"
+    "5. If a question hinges on a general rules-engine concept (how counters, "
+    "replacement effects, layers/continuous effects, or state-based actions "
+    "work in general, not a specific card or keyword), search_rules may miss "
+    "the governing rule because it's worded abstractly with no card-specific "
+    "vocabulary to match against. If search_rules results feel incomplete for "
+    "that kind of question, call get_rules_chapter with the relevant chapter "
+    "number (e.g. 122 for Counters, 614 for Replacement Effects) to see every "
+    "rule in that chapter at once.\n\n"
     "Do not append your own 'Citations:'/'Rulings:'/'Sources:' block to your "
     "answer -- the application builds one standardized citations display "
     "automatically from your tool calls. Just write the answer itself: when "
@@ -138,6 +147,58 @@ _MENTIONED_RULE_PATTERN = re.compile(r"\b(\d{3}\.\d+)([a-z])?\b")
 # blow up latency.
 _MAX_CITATION_VERIFICATIONS = 5
 
+# Deterministic, code-level trigger for pre-seeding a get_rules_chapter call
+# before the model does any of its own reasoning -- NOT a prompt instruction,
+# for the same "prompt-only compliance isn't reliable" reason as the citation
+# verification above. search_rules (semantic search) reliably fails to
+# surface these specific CR chapters: they're worded abstractly (no card
+# names, keywords, or permanent types), so a card-specific question's
+# embedding never lands near them. Confirmed live: rule 122.6 -- the rule
+# that resolves "does a planeswalker's ETB loyalty count as counters put on
+# it for Doubling Season" -- ranked 974th out of 1172 rules by embedding
+# similarity for the natural phrasing of that question, and still didn't
+# appear even re-ranked within its own 9-rule chapter (rank 7 of 9). Only an
+# unranked full-chapter fetch reliably includes it.
+#
+# Deliberately keyed off the raw user question text, not the rules retrieved
+# by search_rules -- checking retrieved rule text too was tried and
+# over-triggered (a rule mentioning "replacement effect" in passing pulled in
+# an unrelated chapter every time), inflating cost without improving
+# accuracy. Deliberately a SMALL, cheap, high-confidence set for this first
+# pass, not every chapter the citation-frequency analysis surfaced -- see
+# docs/TODO.md for the larger candidate list (603 Triggered Abilities, 707
+# Copying Objects, 608 Resolving Spells and Abilities, 601 Casting Spells,
+# 113 Abilities, 400 Zones) deferred until real chat-log volume (see
+# ops/STATUS.md) shows they're actually needed, since several of those
+# chapters are large enough (~3-5.5k tokens) that adding them speculatively
+# would raise cost with no evidence they fix a real gap.
+FRAMEWORK_CHAPTER_TRIGGERS: dict[str, tuple[list[str], str]] = {
+    "122": (["counter"], "Counters"),
+    "614": (["replacement effect"], "Replacement Effects"),
+    "615": (["prevent"], "Prevention Effects"),
+    "616": (
+        ["multiple replacement", "order of application", "both replacement", "both apply"],
+        "Interaction of Replacement and/or Prevention Effects",
+    ),
+    "613": (["layer", "timestamp", "dependency", "dependent"], "Interaction of Continuous Effects"),
+    "704": (["state-based action", "state based action"], "State-Based Actions"),
+    "604": (["static ability"], "Handling Static Abilities"),
+    "117": (["priority"], "Timing and Priority"),
+    "101": (["golden rule", "overrides the rules", "card text overrides"], "The Magic Golden Rules"),
+}
+
+
+def _framework_chapters_for(question: str) -> list[str]:
+    """Pure string matching against the raw question -- zero tokens, zero
+    latency, fully deterministic (unlike an LLM-based sufficiency check,
+    which was prototyped and measured to be both more expensive -- it taxes
+    every query, not just the ones that need it -- and less reliable -- it
+    named a different, less-relevant chapter across separate runs of the
+    exact same question)."""
+    q = question.lower()
+    return [chapter for chapter, (keywords, _title) in FRAMEWORK_CHAPTER_TRIGGERS.items()
+            if any(kw in q for kw in keywords)]
+
 
 def _content_to_text(content: Any) -> str:
     """Tool message content is a plain str for our one remaining in-process @tool
@@ -176,7 +237,7 @@ def _extract_sources(messages: list) -> dict[str, list[str]]:
         name = getattr(message, "name", None)
         content = _content_to_text(message.content)
 
-        if name in ("search_rules", "get_rule_by_id"):
+        if name in ("search_rules", "get_rule_by_id", "get_rules_chapter"):
             rules.update(_RULE_ID_PATTERN.findall(content))
         elif name == "get_card_rulings":
             match = _RULING_CARD_PATTERN.search(content)
@@ -419,10 +480,63 @@ class MTGJudgeAgent:
     rest of the app expects (mirrors the old MTGJudgeChain.query shape, but async
     and with structured, tool-derived citations instead of hand-set flags)."""
 
-    def __init__(self, agent, mcp_client: MultiServerMCPClient, get_rule_by_id_tool=None):
+    def __init__(
+        self,
+        agent,
+        mcp_client: MultiServerMCPClient,
+        get_rule_by_id_tool=None,
+        get_rules_chapter_tool=None,
+    ):
         self._agent = agent
         self._mcp_client = mcp_client  # kept referenced for the process lifetime
         self._get_rule_by_id_tool = get_rule_by_id_tool
+        self._get_rules_chapter_tool = get_rules_chapter_tool
+
+    async def _build_initial_messages(self, user_query: str) -> list[dict]:
+        """Pre-seeds a completed get_rules_chapter tool call/result pair into
+        this turn's messages, ahead of the model's own reasoning, whenever
+        FRAMEWORK_CHAPTER_TRIGGERS matches the raw question -- so the model
+        sees the chapter as if it had already called the tool itself, with no
+        extra LLM round-trip (the graph just continues its normal ReAct loop
+        from "last message is a ToolMessage" and can still make its own
+        additional tool calls afterward). Shared by query() and
+        stream_tokens() so both paths get this consistently -- see the
+        pre_len-scoping duplication note on those methods for why this
+        codebase already has to keep dual paths like this in sync by hand.
+
+        Falls back to a plain user message if get_rules_chapter_tool wasn't
+        wired (should not happen once build_agent() runs) or if the fetch
+        itself fails -- a missing chapter fetch should never block the
+        model's own real search_rules-based answer."""
+        chapters = _framework_chapters_for(user_query)
+        if not chapters or self._get_rules_chapter_tool is None:
+            return [{"role": "user", "content": user_query}]
+
+        tool_calls = []
+        tool_messages = []
+        for chapter in chapters:
+            try:
+                result = await self._get_rules_chapter_tool.ainvoke({"chapter": chapter})
+            except Exception:
+                logger.warning("Framework chapter pre-fetch failed for chapter %r", chapter, exc_info=True)
+                continue
+            call_id = f"framework-{chapter}-{uuid.uuid4().hex[:8]}"
+            tool_calls.append({"name": "get_rules_chapter", "args": {"chapter": chapter}, "id": call_id})
+            tool_messages.append({
+                "role": "tool",
+                "name": "get_rules_chapter",
+                "content": _content_to_text(result),
+                "tool_call_id": call_id,
+            })
+
+        if not tool_calls:
+            return [{"role": "user", "content": user_query}]
+
+        return [
+            {"role": "user", "content": user_query},
+            {"role": "ai", "content": "", "tool_calls": tool_calls},
+            *tool_messages,
+        ]
 
     async def query(self, user_query: str, thread_id: str) -> dict[str, Any]:
         config = {"configurable": {"thread_id": thread_id}}
@@ -437,9 +551,8 @@ class MTGJudgeAgent:
         pre_state = await self._agent.aget_state(config)
         pre_len = len(pre_state.values.get("messages", []))
         try:
-            result = await self._agent.ainvoke(
-                {"messages": [{"role": "user", "content": user_query}]}, config=config
-            )
+            initial_messages = await self._build_initial_messages(user_query)
+            result = await self._agent.ainvoke({"messages": initial_messages}, config=config)
         except Exception:
             logger.exception("Agent run failed for query: %r", user_query)
             return {
@@ -478,8 +591,9 @@ class MTGJudgeAgent:
         pre_len = len(pre_state.values.get("messages", []))
         answer_parts: list[str] = []
         try:
+            initial_messages = await self._build_initial_messages(user_query)
             async for token_msg, _metadata in self._agent.astream(
-                {"messages": [{"role": "user", "content": user_query}]},
+                {"messages": initial_messages},
                 config=config,
                 stream_mode="messages",
             ):
@@ -513,6 +627,7 @@ async def build_agent(checkpointer=None) -> MTGJudgeAgent:
     mcp_tools = await mcp_client.get_tools()
     tools = [*mcp_tools, web_search]
     get_rule_by_id_tool = next((t for t in mcp_tools if t.name == "get_rule_by_id"), None)
+    get_rules_chapter_tool = next((t for t in mcp_tools if t.name == "get_rules_chapter"), None)
 
     model = build_chat_model()
     agent = create_agent(
@@ -528,4 +643,4 @@ async def build_agent(checkpointer=None) -> MTGJudgeAgent:
         Config.LLM_PROVIDER,
         [getattr(t, "name", str(t)) for t in tools],
     )
-    return MTGJudgeAgent(agent, mcp_client, get_rule_by_id_tool)
+    return MTGJudgeAgent(agent, mcp_client, get_rule_by_id_tool, get_rules_chapter_tool)

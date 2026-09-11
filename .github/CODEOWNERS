@@ -28,5 +28,5 @@
 /docker-compose.override.yml  @Delta-43 @reliability-owner
 /Caddyfile              @Delta-43 @ktrileo
 
-# CI workflows, once they exist (see PUBLISHING_PLAN.md Stage 0).
+# CI workflows (see PUBLISHING_PLAN.md Stage 0 for the rollout history).
 /.github/               @Delta-43 @ktrileo

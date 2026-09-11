@@ -92,7 +92,7 @@ Every box above is a real, independently-runnable module — `webapp/`,
 | Component | Status | Detail |
 |---|:---:|---|
 | Backend (agent, API, rules & card search) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`server/`](server/README.md) · [status](server/STATUS.md) |
-| Web App (PWA) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`webapp/`](webapp/README.md) · [status](webapp/STATUS.md) · [redesign plan](docs/WEBAPP_PLAN.md) |
+| Web App (PWA) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`webapp/`](webapp/README.md) · [status](webapp/STATUS.md) |
 | Discord Bot ("Azor, High Arbiter") | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`discord_client/`](discord_client/README.md) · [status](discord_client/STATUS.md) |
 | Ops (backup/restore, monitoring) | ![Live](https://img.shields.io/badge/-Live-brightgreen) | [`ops/`](ops/README.md) · [status](ops/STATUS.md) |
 | Public Hosted Instance | ![Live](https://img.shields.io/badge/-Live-brightgreen) | `azor.delta43.net` |
@@ -127,9 +127,24 @@ curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" \
   -d '{"query": "What happens during the untap step?"}'
 ```
 
+Want everything in Docker but still no `webapp/`/Node involved? `caddy`
+only pulls in `webapp/` to build the PWA into its image — skip both:
+`docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng`,
+then hit `http://localhost:8000` directly (its own dev test UI at `/`,
+plus `/chat`, `/chat/stream`, `/health`, `/metrics`). See
+`docs/DESCRIPTION.md`'s "Local, webapp-free" section for a proxy-fronted
+(`caddy-local`) variant of this too.
+
 For the full Docker deployment (public-facing, incl. Cloudflare Tunnel, R2
 backup, and the Discord bot), environment variables, troubleshooting, and
 the complete API reference, see **[`docs/DESCRIPTION.md`](docs/DESCRIPTION.md)**.
+
+Once that full stack is deployed, [`scripts/azor.sh`](scripts/azor.sh) (symlink
+it as `azor` on your `PATH`) wraps it with `azor {start|stop|restart|status|logs}`
+against your host's actual active `docker compose` profile set. It's a manual
+convenience for the beta phase, not a requirement — every container already has
+`restart: unless-stopped` and comes back on its own after a host reboot as long
+as `docker.service` is enabled at boot.
 
 ## 🧰 Tech Stack
 
@@ -190,7 +205,7 @@ mtg_local_chatbot/
 ├── ops/               # R2 backup/restore, Prometheus monitoring (--profile monitoring)
 ├── shared/            # Cross-module brand assets & design reference
 ├── docs/              # Everything below — architecture, features, plans
-└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts/monitoring)
+└── docker-compose.yml # Full stack + optional profiles (tunnel/backup/discord/accounts/monitoring/local)
 ```
 
 Every module has its own `README.md` (setup/run detail) and `STATUS.md`
@@ -208,7 +223,7 @@ picture.
 | [`docs/PLAN.md`](docs/PLAN.md) | What's done, and why, at the project level |
 | [`docs/TODO.md`](docs/TODO.md) | The working next-steps list |
 | [`docs/PUBLISHING_PLAN.md`](docs/PUBLISHING_PLAN.md) | Self-hosted OSS + hosted SaaS publishing strategy |
-| [`docs/WEBAPP_PLAN.md`](docs/WEBAPP_PLAN.md) | In-progress PWA visual redesign |
+| [`docs/WEBAPP_PLAN.md`](docs/WEBAPP_PLAN.md) | PWA visual redesign plan — superseded, kept for historical context; the shipped redesign is described in [`webapp/STATUS.md`](webapp/STATUS.md) |
 | [`CLAUDE.md`](CLAUDE.md) | Deep implementation notes — the non-obvious "why" behind the code |
 | `server/`, `discord_client/`, `webapp/`, `ops/`, `shared/` — `README.md` | Per-module setup & run instructions |
 | `server/`, `discord_client/`, `webapp/`, `ops/`, `shared/` — `STATUS.md` | Per-module current status, features, and what's left — see [`server/STATUS.md`](server/STATUS.md) for the pattern |

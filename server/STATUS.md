@@ -20,7 +20,7 @@ each other; see `.github/CODEOWNERS` for who reviews what.
 Overall project status: backend, web app, and Discord bot are all **live**.
 Accounts/tiers/billing is **planned, not started**; CI/CD is now **live** (see `.github/workflows/`). Observability
 (Prometheus metrics + SLO rules, opt-in `--profile monitoring`) is now **live** for the Crawl phase, per `docs/OBSERVABILITY_PLAN_V2.md`. The web
-app's visual redesign is **paused** pending a design direction.
+app's visual redesign **shipped 2026-09-09** (a light "paper lightbox" theme — see `webapp/STATUS.md`).
 
 ## 📦 This module: server/
 
@@ -90,6 +90,42 @@ bottleneck again — just not faster today.
   search over the Comprehensive Rules via a local ChromaDB index that
   self-refreshes from wizards.com on boot, with incremental (not
   full-rebuild) re-ingestion.
+- **Framework-chapter pre-fetch, not just semantic search** — found live
+  during beta: some rulings (e.g. "does Doubling Season double a
+  planeswalker's ETB loyalty?") flipped between correct and incorrect
+  answers across separate runs of the identical question. Root cause,
+  confirmed by direct measurement against the live index: the governing
+  rule (122.6) is worded too abstractly (no card/keyword vocabulary) for
+  `search_rules` to ever surface it -- it ranked 974th of 1172 rules by
+  embedding similarity, and still missed even a re-ranked top-4 within its
+  own 9-rule chapter. An LLM-based "is this enough context?" verifier step
+  was prototyped and measured, but rejected: it taxes every single query
+  (not just the ones that need it) and, being an LLM call itself, wasn't
+  even reliable -- it named a different, less-useful chapter across
+  repeated runs of the same question. The shipped fix
+  (`FRAMEWORK_CHAPTER_TRIGGERS`/`_framework_chapters_for()` in
+  `llm_agent/agent.py`, `get_rules_chapter` in `rules_mcp/server.py`) is
+  fully deterministic instead: a small static keyword→chapter map checked
+  against the raw question (zero tokens, zero latency); on a match, the
+  entire chapter is pre-seeded into the conversation as a completed tool
+  call before the model's own reasoning starts, so there's no risk of a
+  ranked top-k cutoff dropping the one rule that matters -- and no extra
+  LLM round-trip, since the model's normal single generation just
+  continues from there. Unrelated questions pay nothing extra. Verified
+  live against the real `/chat` and `/chat/stream` endpoints, 5/5 runs
+  correct with the right citation, no change to unrelated queries. Ships
+  with a small, deliberately conservative chapter set (122 Counters, 614
+  Replacement Effects, 615 Prevention Effects, 616 Interaction of
+  Replacement/Prevention Effects, 613 Interaction of Continuous Effects/
+  layers, 704 State-Based Actions, 604 Static Abilities, 117 Timing and
+  Priority, 101 Golden Rules) -- a citation-frequency analysis over the
+  whole rules corpus surfaced further candidates (603 Triggered Abilities,
+  707 Copying Objects, 608 Resolving Spells/Abilities, 601 Casting Spells,
+  113 Abilities, 400 Zones) deliberately left out of this pass since
+  they're large enough (~3-5.5k tokens each) that adding them without
+  evidence of a real gap would raise cost for no proven benefit -- meant to
+  be grown from real beta chat-log volume once that's set up, not guessed
+  at further ahead of data.
 - **Card data** (`scryfall_mcp/`) — a local fork of upstream's Scryfall
   MCP server (16 tools total, including a locally-added `get_card_rulings`
   closing the one gap in upstream's tool set).
@@ -126,6 +162,16 @@ bottleneck again — just not faster today.
   by the opt-in `ops/monitoring/` Prometheus service. Per-tool-call
   metrics (`agent_tool_calls_total`) are NOT part of this yet — scoped as
   separate follow-up work; see `CLAUDE.md`.
+- **Reachable without `webapp/`** — `mtg-judge` now publishes
+  `127.0.0.1:8000` directly in `docker-compose.yml`, and a new
+  `caddy-local` service (bare `caddy:2`, no build) gives a proxy front
+  door with no dependency on `webapp/`'s Node build at all. `caddy`
+  (the main service, PWA baked in) is unchanged — this is additive, not a
+  replacement. See `docs/DESCRIPTION.md`'s "Local, webapp-free" section.
+  Verified live: `docker compose up -d --build mtg-judge rules-mcp
+  scryfall-mcp searxng [caddy-local]`, `/`, `/health`, `/metrics`, and
+  `/chat` all responded correctly both directly on `:8000` and proxied
+  through `caddy-local`.
 
 ### Remaining work
 
