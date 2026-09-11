@@ -358,8 +358,14 @@ services:
     build: ./ops
     container_name: mtg-r2-backup
     volumes:
-      - ./data/conversations:/app/data/conversations:ro
-      - ./data/chroma:/app/data/chroma:ro
+      # Not `:ro` -- this same service definition is also used one-off via
+      # `docker compose run --rm r2-backup python restore_from_r2.py --yes`
+      # (see that script's docstring), which needs to write the restored
+      # SQLite DB and Chroma persist dir back into these paths. The standing
+      # `--profile backup` service (backup_to_r2.py) only ever reads from
+      # them, so the writable mount doesn't change its behavior.
+      - ./data/conversations:/app/data/conversations
+      - ./data/chroma:/app/data/chroma
     environment:
       # Not `:?`-required (see the `tunnel` service's comment above) --
       # ops/backup_to_r2.py already no-ops with a clear log line if these
