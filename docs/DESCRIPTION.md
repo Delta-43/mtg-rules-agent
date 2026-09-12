@@ -1,29 +1,26 @@
 # MTG Azor — Full Project Description
 
 This is the comprehensive technical reference: architecture, configuration,
-deployment, and operations, all in one place. `README.md` (repo root) is the
-short, visual introduction; `docs/FEATURES.md` is the feature-by-feature
-verification catalog; `docs/PLAN.md`/`docs/TODO.md` track what's done and
-what's next; `docs/PUBLISHING_PLAN.md` covers the dual-product (self-hosted
-+ hosted) publishing strategy. Each module (`server/`, `discord_client/`,
-`webapp/`, `ops/`, `shared/`, and `server/rules_mcp/`/`server/scryfall_mcp/`/
-`server/accounts_db/` within it) has its own README for day-to-day work
+deployment, and operations, all in one place. `README.md` (repo root) is
+the short, visual introduction. `server/` (and `server/rules_mcp/`/
+`server/scryfall_mcp/` within it) has its own README for day-to-day work
 inside that piece — this file is the cross-cutting picture that ties them
-together, not a duplicate of any of them. Each of the five top-level
-modules also has a `STATUS.md` alongside its README — a short,
-consistently-structured snapshot (project-wide summary, this module's
-current status/features, what's left to do) meant for a developer who
-just wants "where does this stand right now," without reading the full
-`docs/PLAN.md`/`docs/TODO.md` history.
+together, not a duplicate of it. `server/` also has a `STATUS.md` alongside
+its README — a short, consistently-structured snapshot (current
+status/features, what's left to do) for a developer who just wants
+"where does this stand right now."
+
+This repo is the reply server only: the agent, the API, and the rules/card
+data tools. It ships no fixed client — build your own (web, Discord,
+Telegram, CLI, anything) against the HTTP API described in §7.
 
 ---
 
 ## 1. What the project does
 
 MTG Azor is an AI assistant for **Magic: The Gathering** rules questions,
-available as a web app, a Discord bot, or directly over HTTP. At answer
-time, a tool-calling agent decides for itself which of the following to
-consult, in what order:
+served directly over HTTP. At answer time, a tool-calling agent decides
+for itself which of the following to consult, in what order:
 
 1. Official Comprehensive Rules content, retrieved semantically from a
    local ChromaDB index (via `rules-mcp`).
@@ -45,8 +42,7 @@ if web search was used. If the agent can't ground part of an answer in a
 tool result, it's instructed to say so rather than guess.
 
 The service is exposed over HTTP with FastAPI (CORS, API-key auth, rate
-limiting), and currently sits behind two real client surfaces — a React
-PWA and a Discord bot — with the API itself reusable by any other client.
+limiting) so any client can talk to it — the API itself is the product.
 
 ### Design goals
 
@@ -56,8 +52,8 @@ PWA and a Discord bot — with the API itself reusable by any other client.
 | Runs local-first or public | Pluggable LLM provider (Ollama, local or cloud, vs. hosted OpenRouter); no code path assumes local-only |
 | Don't duplicate existing OSS | Card data delegated to a local fork of an actively maintained Scryfall MCP server instead of a bespoke wrapper; only the one gap in its tool set (rulings) was added locally |
 | Rules retrieval is a reusable asset | `server/rules_mcp/` is self-contained (no imports from the rest of this repo) so it can be lifted into its own repo |
-| Reproducible, self-hosted deployment | docker-compose with a Caddy reverse proxy for TLS |
-| Modular for a growing team | `server/`, `discord_client/`, `webapp/`, `ops/` split with per-module READMEs and `.github/CODEOWNERS` |
+| Reproducible, self-hosted deployment | docker-compose with an optional Caddy reverse proxy for TLS |
+| Client-agnostic | The product is the API; a frontend is a choice left to whoever deploys it |
 
 ---
 
@@ -79,11 +75,11 @@ Two operational phases:
    built from the tool calls actually made, not a hand-set flag.
 
 ```text
-Client (webapp/ PWA, discord_client/ bot) -> Caddy -> FastAPI (server/app_api/main.py)
-                                                    -> tool-calling agent (server/llm_agent/agent.py)
-                                                       |-- rules-mcp (MCP, HTTP): search_rules, get_rule_by_id, get_rules_chapter
-                                                       |-- scryfall-mcp (MCP, HTTP): search_cards, get_card, get_card_rulings, ...
-                                                       `-- web_search (in-process @tool: SearXNG + trafilatura)
+Client (yours) -> [Caddy, optional] -> FastAPI (server/app_api/main.py)
+                                     -> tool-calling agent (server/llm_agent/agent.py)
+                                        |-- rules-mcp (MCP, HTTP): search_rules, get_rule_by_id, get_rules_chapter
+                                        |-- scryfall-mcp (MCP, HTTP): search_cards, get_card, get_card_rulings, ...
+                                        `-- web_search (in-process @tool: SearXNG + trafilatura)
 ```
 
 See the root `README.md` for the same picture as a Mermaid diagram.
@@ -92,10 +88,7 @@ See the root `README.md` for the same picture as a Mermaid diagram.
 
 ## 3. Component layout
 
-Reorganized (September 2026) into four top-level modules plus `shared/` —
-see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
-
-- **`server/`** — the backend product (status: [`server/STATUS.md`](../server/STATUS.md)):
+- **`server/`** — the whole product (status: [`server/STATUS.md`](../server/STATUS.md)):
   - `app_api/` — FastAPI app lifecycle, HTTP endpoints, CORS, API-key
     auth, rate limiting, aggregate health check across the MCP servers.
   - `llm_agent/` — the tool-calling agent (`agent.py`), the pluggable LLM
@@ -103,9 +96,6 @@ see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
     (`web_search_tool.py`).
   - `core_config/` — canonical configuration loader for the main backend
     (YAML-first, env-override).
-  - `accounts_db/` — SQLAlchemy models + Alembic migration for the future
-    accounts/tiers/billing pivot (Phase 0 scaffolding, not wired in yet —
-    see `docs/PLAN.md`).
   - `rules_mcp/` — standalone MCP server: rules PDF acquisition,
     hierarchical parsing, ChromaDB ingestion, `search_rules`/
     `get_rule_by_id`/`get_rules_chapter` tools. Self-contained; own
@@ -117,21 +107,6 @@ see `docs/PUBLISHING_PLAN.md` for the reasoning behind the split.
   - `searxng/` — config for the self-hosted metasearch instance backing
     `web_search`.
   - `tests/` — pytest suite covering `app_api`'s routes.
-- **`discord_client/`** (status: [`STATUS.md`](../discord_client/STATUS.md))
-  — thin `discord.py` client calling the public
-  `/chat` API. Named `discord_client`, not `discord`, deliberately — a
-  bare `discord/` directory at the repo root would shadow the real
-  `discord.py` library on any host-run invocation.
-- **`webapp/`** (status: [`STATUS.md`](../webapp/STATUS.md)) — React +
-  Vite PWA, built into the `caddy` image and served same-origin with the API.
-- **`ops/`** (status: [`STATUS.md`](../ops/STATUS.md)) — R2 backup/restore
-  scripts with their own lightweight image (no LangChain dependency), plus
-  `monitoring/` — Prometheus scrape config + SLO recording rules/alert
-  (opt-in `--profile monitoring`), per `docs/OBSERVABILITY_PLAN_V2.md`.
-- **`shared/`** (status: [`STATUS.md`](../shared/STATUS.md)) —
-  cross-module committed source assets (brand art, design
-  reference) — deliberately not inside `data/`, which is gitignored
-  runtime state with nothing in common with these.
 
 Runtime data lives under `data/` (gitignored, at the repo root, not inside
 `server/`), owned by `rules-mcp` and the conversation memory layer:
@@ -190,23 +165,13 @@ Key implementation files:
 | `RULES_MCP_URL` | `http://localhost:8100/mcp` | rules-mcp endpoint |
 | `SCRYFALL_MCP_URL` | `http://localhost:3000/mcp` | scryfall-mcp endpoint |
 | `SEARXNG_URL` | `http://localhost:8080` | SearXNG endpoint for `web_search` |
-| `SCRYFALL_USER_AGENT` | `MTG-Judge-Chatbot/1.0 (+https://github.com/mtg-judge)` | Sent to Scryfall by scryfall-mcp |
+| `SCRYFALL_USER_AGENT` | `MTG-Judge-Chatbot/1.0 (+https://github.com/mtg-judge)` | Sent to Scryfall by scryfall-mcp — identify your own deployment here |
 | `CORS_ALLOWED_ORIGINS` | *(empty = disabled)* | Comma-separated origin allowlist |
 | `API_KEYS` | *(empty = disabled)* | Comma-separated valid `X-API-Key` values. A request with no key at all is still allowed (anonymous tier) — this list only validates keys that ARE presented |
 | `RATE_LIMIT_PER_MINUTE` | `20` | Per API-key/IP rate limit on `/chat`, `/chat/stream` |
 | `DAILY_QUOTA_ANONYMOUS` | `30` | Daily request cap for keyless (anonymous-tier) callers |
 | `DAILY_QUOTA_AUTHENTICATED` | `500` | Daily request cap for callers with a valid `X-API-Key` |
 | `CONVERSATION_DB_PATH` | `data/conversations/conversations.db` | SQLite file backing multi-turn conversation memory |
-| `VITE_API_BASE_URL` | *(empty)* | Build-time only, read by `webapp/Dockerfile`. Empty = same-origin deploy; set only if the frontend is built to call a backend on a different origin |
-| `CLOUDFLARE_TUNNEL_TOKEN` | *(none)* | `cloudflared`'s connector token — only read under `docker-compose --profile tunnel` |
-| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | *(none)* | R2 credentials for `ops/backup_to_r2.py`/`ops/restore_from_r2.py` — only read under `--profile backup` or a manual `docker compose run` |
-| `R2_BACKUP_INTERVAL_SECONDS` | `3600` | How often the `backup` profile snapshots `data/` to R2 |
-| `DISCORD_BOT_TOKEN` | *(none)* | Bot token from the Discord Developer Portal — only read under `--profile discord` |
-| `DISCORD_API_KEY` | *(none)* | Dedicated `API_KEYS` entry for the bot's own calls |
-| `DISCORD_API_BASE_URL` | `https://azor.delta43.net` | Public backend URL the bot calls — deliberately not an internal Docker service name |
-| `DISCORD_ALLOWED_GUILD_IDS` | *(empty = any server)* | Comma-separated guild IDs to restrict `/judge` to |
-| `DISCORD_ALLOWED_CHANNEL_IDS` | *(empty = any channel)* | Comma-separated channel IDs to restrict `/judge` to within an allowed guild |
-| `DISCORD_COOLDOWN_SECONDS` | `10` | Per-user cooldown on `/judge` |
 
 ---
 
@@ -224,10 +189,9 @@ Key implementation files:
   `event: error`).
 - `GET /metrics` — Prometheus-format metrics (`prometheus-fastapi-instrumentator`
   plus a purpose-built `http_streaming_ttft_seconds` histogram for
-  `/chat/stream`'s time-to-first-token); not exposed through the public
-  Caddy path (`Caddyfile`'s `@api` matcher never lists it), loopback/
-  `mtg-network` only. See §6's Monitoring section and
-  `docs/OBSERVABILITY_PLAN_V2.md`.
+  `/chat/stream`'s time-to-first-token); not exposed through the optional
+  Caddy path (`Caddyfile`'s matcher never lists it), loopback/
+  `mtg-network` only.
 - Lifespan startup builds the agent once (constructs the MCP client,
   loads tools, builds the chat model) and fails fast if
   `LLM_PROVIDER=hosted` without an API key.
@@ -246,7 +210,7 @@ Key implementation files:
   flags — see `CLAUDE.md` for the citation-verification/pruning safety
   nets and the several formatting-hardening fixes (off-topic refusal,
   citation-block dedup, cross-turn leakage, LaTeX/heading artifacts,
-  repetition, self-correction) found via real Discord/PWA usage.
+  repetition, self-correction) found via real client usage.
 
 ### 5.3 Rules MCP server (`server/rules_mcp/`)
 
@@ -285,28 +249,6 @@ Queries a self-hosted SearXNG instance's JSON API, fetches and extracts
 snippets, falling back to the snippet if extraction fails. Used by the
 agent only when rules/rulings tools don't resolve the question.
 
-### 5.6 Discord bot (`discord_client/`)
-
-"Azor, High Arbiter" — a single `/judge` slash command calling the public
-`/chat` API (never `/chat/stream`; coalescing streamed tokens into
-Discord message edits fights Discord's own edit rate limits). Renders
-mana symbols as real Discord application emojis and tables as branded
-embeds. Full detail in
-[`discord_client/README.md`](../discord_client/README.md) and `CLAUDE.md`'s
-Discord bot section; current status in
-[`discord_client/STATUS.md`](../discord_client/STATUS.md).
-
-### 5.7 Web app (`webapp/`)
-
-React + Vite PWA, SSE streaming chat UI, `conversation_id` persisted
-client-side for multi-turn continuity. Same-origin deploy by default (no
-CORS needed). Full detail in
-[`webapp/README.md`](../webapp/README.md); the visual redesign (a light
-"paper lightbox" theme) shipped 2026-09-09 — see
-[`webapp/STATUS.md`](../webapp/STATUS.md) for what's live, and
-`docs/WEBAPP_PLAN.md` (superseded) for the original plan's historical
-context only.
-
 ---
 
 ## 6. Deployment
@@ -326,124 +268,45 @@ not `cd server` — see `server/README.md` for why cwd matters for
 ### Full stack (Docker)
 
 ```bash
-docker-compose up --build
-```
-
-Starts `mtg-judge`, `rules-mcp`, `scryfall-mcp`, `searxng`, and `caddy`.
-`caddy` serves the built PWA (`webapp/`) as static assets and
-reverse-proxies `/chat*`/`/health` to `mtg-judge` — one origin, no CORS
-configuration needed for the primary deploy. `caddy` is the only service
-meant to be reachable off-host; `rules-mcp`/`scryfall-mcp`/`searxng` are
-loopback-only (`127.0.0.1`, for the hybrid-dev workflow above), and
-`mtg-judge` itself is now also published on loopback (`127.0.0.1:8000`,
-see below) for the webapp-free path.
-
-For a real domain with automatic TLS *and* a directly exposed port
-80/443, edit `Caddyfile` and replace the `:80` block with your domain. For
-a Cloudflare Tunnel instead (no port needs to be open at all), see below
-and leave `Caddyfile` on plain `:80`, since TLS terminates at Cloudflare's
-edge in that case.
-
-### Local, webapp-free (no `webapp/` build, no Node needed)
-
-`webapp/` is only pulled in because `caddy`'s image (`webapp/Dockerfile`)
-builds the PWA into it — nothing in `mtg-judge` itself depends on it.
-Skip both `caddy` and `webapp/` entirely and talk to the backend directly:
-
-```bash
 docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng
 curl http://127.0.0.1:8000/health
 ```
 
-`mtg-judge` already serves its own zero-build dev test UI at `/` (the
-same one `run_bot.sh`'s hybrid workflow uses), plus `/chat`, `/chat/stream`,
-and `/metrics` — nothing else to stand up for local use. Naming services
-explicitly like this (rather than a bare `docker compose up`) is what
-keeps `caddy`/`webapp/` out of it; `caddy` has no profile, so it would
-otherwise still start (and still need to build `webapp/`) by default.
+`mtg-judge` already serves its own zero-build dev test UI at `/` (the same
+one `run_bot.sh`'s hybrid workflow uses), plus `/chat`, `/chat/stream`,
+`/health`, and `/metrics` — that's the entire product surface; nothing else
+to stand up for local use.
 
-If you want a reverse-proxy front door anyway (a real domain/TLS) without
-the PWA, `caddy-local` is the same idea as `caddy` but built from the bare
-`caddy:2` image with no `webapp/` dependency at all — add it to the
-service list above and see `Caddyfile.local`. Verified end-to-end this
-way: real `docker compose up -d --build` of exactly this service list,
-`/`, `/health`, and `/chat` all responding correctly both directly on
-`:8000` and through `caddy-local`.
-
-### Cloudflare Tunnel (opt-in: `--profile tunnel`)
-
-Exposes the stack at a real domain with TLS terminated at Cloudflare's
-edge, without opening any port on the host:
-
-1. In the Cloudflare Zero Trust dashboard, create a tunnel and add a
-   public hostname pointing at `http://localhost:80` (or wherever
-   `caddy`'s port is actually mapped on this host — check
-   `docker port mtg-caddy` if a local `docker-compose.override.yml`
-   remaps it, e.g. because something else already owns 80/443).
-2. Copy the tunnel's **connector token** (the long `eyJ...` string, not
-   the tunnel UUID) into `CLOUDFLARE_TUNNEL_TOKEN` in `.env`.
-3. `docker-compose --profile tunnel up -d --build`
-
-### R2 backup (opt-in: `--profile backup`)
-
-Periodically snapshots conversation memory and the rules index to a
-Cloudflare R2 bucket, so state survives a VPS rebuild:
-
-1. Create an R2 bucket and API token (Cloudflare dashboard → R2 → Manage
-   API Tokens).
-2. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-   `R2_BUCKET` in `.env`.
-3. `docker-compose --profile backup up -d`
-
-Writes a single overwritten "latest" snapshot (`ops/backup_to_r2.py`) —
-enable R2 bucket versioning if you want point-in-time history instead.
-To restore (**stop `mtg-judge`/`rules-mcp` first**):
+If you want a reverse-proxy front door (a real domain/TLS), add `caddy` to
+that service list — it's a bare `caddy:2` image (no build step, no
+frontend baked in) configured by `Caddyfile`, reachable on
+`127.0.0.1:8877` by default:
 
 ```bash
-docker compose stop mtg-judge rules-mcp
-docker compose run --rm r2-backup python restore_from_r2.py       # dry run
-docker compose run --rm r2-backup python restore_from_r2.py --yes # actually restores
-docker compose up -d mtg-judge rules-mcp
+docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng caddy
 ```
 
-Profiles combine: `docker-compose --profile tunnel --profile backup up -d --build`.
+Edit `Caddyfile` for a real domain and automatic TLS, or put your
+own tunnel/reverse-proxy of choice in front of `mtg-judge`/`caddy` instead
+— nothing here assumes a particular public-exposure mechanism.
 
-### Discord bot (opt-in: `--profile discord`)
+### Monitoring
 
-1. Register an application in the
-   [Discord Developer Portal](https://discord.com/developers/applications),
-   add the `applications.commands` OAuth2 scope, copy its bot token.
-2. Set `DISCORD_BOT_TOKEN` and a dedicated `DISCORD_API_KEY` in `.env`.
-3. `docker-compose --profile discord up -d --build discord-bot`
-
-Attached to `mtg-network` as of the observability pass below — but only
-for Prometheus to reach its `:9100/metrics` endpoint by Docker DNS when
-colocated on this host; its actual API calls still go to the backend's
-public URL unchanged, so this doesn't reintroduce a functional
-Docker-internal-DNS dependency. Full setup/branding detail in
-[`discord_client/README.md`](../discord_client/README.md).
-
-### Monitoring (opt-in: `--profile monitoring`)
-
-A self-hosted Prometheus (per `docs/OBSERVABILITY_PLAN_V2.md`'s Crawl
-phase), scraping `mtg-judge:8000/metrics` and, when the `discord` profile
-is also active, `discord-bot:9100/metrics`:
-
-```bash
-docker-compose --profile monitoring up -d
-```
-
-Loads `ops/monitoring/prometheus/rules/slo_rules.yml`'s four SLO recording
-rules/alert automatically. Bound to `127.0.0.1:9090` — not exposed through
-Caddy. `HighToolFailureRate` depends on `agent_tool_calls_total`, which
-isn't emitted yet (per-tool-call instrumentation is scoped as separate
-follow-up work — see `CLAUDE.md`), so that one alert stays inert (no data)
-until that metric lands. Profiles combine with the others above, e.g.
-`docker-compose --profile monitoring --profile discord up -d --build`.
+`GET /metrics` is a standard Prometheus-format endpoint on `mtg-judge` —
+point any Prometheus (or compatible scraper) at it; no bundled monitoring
+stack ships with this repo.
 
 ---
 
 ## 7. API reference
+
+Everything below also works from a terminal without curl via
+`./scripts/chat_cli.py` — a small interactive reference client (streams
+tokens, keeps `conversation_id` across turns, prints citations) meant for
+trying a self-hosted deployment before writing a real client against this
+API. `--no-stream` uses `/chat` instead of `/chat/stream`; `--url`/
+`--api-key` (or `$MTG_AZOR_URL`/`$MTG_AZOR_API_KEY`) point it at a
+non-default deployment.
 
 **Health check:**
 ```bash
@@ -481,20 +344,17 @@ quota on top of the existing per-minute rate limit. `query` is capped at
 ## 8. Project structure
 
 ```
-mtg_local_chatbot/
-├── server/                   # Backend product -- see server/README.md + STATUS.md
-│   ├── app_api/ llm_agent/ core_config/ accounts_db/
+mtg-rules-agent/
+├── server/                   # The whole product -- see server/README.md + STATUS.md
+│   ├── app_api/ llm_agent/ core_config/
 │   ├── rules_mcp/ scryfall_mcp/ searxng/ tests/
 │   └── Dockerfile requirements.txt project_config.yml
-├── discord_client/           # discord.py bot client -- see discord_client/README.md + STATUS.md
-├── webapp/                   # React + Vite PWA -- see webapp/README.md + STATUS.md
-├── ops/                       # R2 backup/restore + monitoring/ (Prometheus) -- see ops/README.md + STATUS.md
-├── shared/                    # Cross-module source assets -- see shared/README.md + STATUS.md
-├── docs/                      # This file, FEATURES.md, PLAN.md, TODO.md, PUBLISHING_PLAN.md, WEBAPP_PLAN.md
+├── docs/                      # This file
+├── assets/                    # Brand images used by the root README
 ├── data/                      # Runtime state only (gitignored)
 ├── setup.sh run_bot.sh stop_bot.sh
-├── docker-compose.yml Caddyfile Caddyfile.local
-├── scripts/run_ollama.sh
+├── docker-compose.yml Caddyfile
+├── scripts/run_ollama.sh chat_cli.py
 └── .github/CODEOWNERS
 ```
 
@@ -564,7 +424,5 @@ offload (e.g. `OLLAMA_VULKAN=0` for the Vulkan backend).
   known tradeoff of model choice, not something a code fix addresses.
 - SearXNG's outbound IP can get rate-limited by upstream search engines
   under sustained traffic — best-effort, no mitigation in place.
-- Accounts/tiers/billing (Phase 1 onward) hasn't started beyond Phase 0
-  scaffolding — see `docs/PLAN.md`.
 - Anonymous-tier abuse mitigation (CAPTCHA/Turnstile) is deferred by
   design until it's actually needed.

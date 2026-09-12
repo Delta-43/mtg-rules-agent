@@ -51,13 +51,13 @@ JUDGE_SYSTEM_PROMPT = (
     "One short list of the actual calculation steps is enough -- don't wrap "
     "each step in its own header and paragraph.\n"
     "- Never use LaTeX notation (no \"$...$\", \"\\times\", \"\\frac{}{}\", "
-    "etc.) -- neither Discord nor the web UI renders it, so it just shows up "
-    "as garbled text. Write arithmetic in plain text instead: \"2 * 3\" or "
+    "etc.) -- most chat clients don't render it, so it just shows up as "
+    "garbled text. Write arithmetic in plain text instead: \"2 * 3\" or "
     "\"2 x 3\", not \"$2 \\times 3$\"; \"12/5\" not \"\\frac{12}{5}\".\n"
-    "- Never use markdown headings (\"#\", \"##\", \"###\"). Discord renders "
-    "them as large text with a lot of extra vertical space around them, "
-    "making even a short answer look sprawling. Use **bold** text for a "
-    "section label instead if you need one at all.\n"
+    "- Never use markdown headings (\"#\", \"##\", \"###\"). Many chat "
+    "clients render them as large text with a lot of extra vertical space "
+    "around them, making even a short answer look sprawling. Use **bold** "
+    "text for a section label instead if you need one at all.\n"
     "- If a question mixes a real rules question with something irrelevant to "
     "Magic rules (e.g. naming a real person, a hypothetical unrelated to the "
     "game), answer only the genuine rules-relevant part in a sentence or two, "
@@ -165,13 +165,13 @@ _MAX_CITATION_VERIFICATIONS = 5
 # over-triggered (a rule mentioning "replacement effect" in passing pulled in
 # an unrelated chapter every time), inflating cost without improving
 # accuracy. Deliberately a SMALL, cheap, high-confidence set for this first
-# pass, not every chapter the citation-frequency analysis surfaced -- see
-# docs/TODO.md for the larger candidate list (603 Triggered Abilities, 707
-# Copying Objects, 608 Resolving Spells and Abilities, 601 Casting Spells,
-# 113 Abilities, 400 Zones) deferred until real chat-log volume (see
-# ops/STATUS.md) shows they're actually needed, since several of those
-# chapters are large enough (~3-5.5k tokens) that adding them speculatively
-# would raise cost with no evidence they fix a real gap.
+# pass, not every chapter a citation-frequency analysis over the rules corpus
+# surfaced as a candidate (603 Triggered Abilities, 707 Copying Objects, 608
+# Resolving Spells and Abilities, 601 Casting Spells, 113 Abilities, 400
+# Zones) -- deliberately left out until real chat-log volume shows they're
+# actually needed, since several of those chapters are large enough
+# (~3-5.5k tokens) that adding them speculatively would raise cost with no
+# evidence they fix a real gap.
 FRAMEWORK_CHAPTER_TRIGGERS: dict[str, tuple[list[str], str]] = {
     "122": (["counter"], "Counters"),
     "614": (["replacement effect"], "Replacement Effects"),
@@ -227,8 +227,9 @@ def _extract_sources(messages: list) -> dict[str, list[str]]:
     # Card-grounded citations shown together in one "Citations:" section --
     # oracle text (this function) and official rulings (below) are both
     # "facts about a specific card", as distinct from sources.rules (a
-    # Comprehensive Rules section number) -- see the discord_client formatting
-    # note on why these are merged instead of getting their own section.
+    # Comprehensive Rules section number) -- merged into one section rather
+    # than getting their own, since any client rendering the answer treats
+    # both the same way (a fact about a specific card).
     citations: set[str] = set()
 
     for message in messages:
@@ -285,23 +286,24 @@ _CITATION_HEADING_WORDS = {"citations", "rulings", "sources", "references"}
 # General whitespace hygiene backstop: caps any run of 3+ newlines down to a
 # single blank line, regardless of where it came from (a stripped citation
 # block leaving its lead-in blank line behind, or the model itself just
-# being generous with spacing) -- Discord renders every blank line as
-# visible vertical space, which matters more on mobile.
+# being generous with spacing) -- many chat clients render every blank line
+# as visible vertical space, which matters more on mobile.
 _EXCESS_BLANK_LINES_PATTERN = re.compile(r"\n{3,}")
 
-# Discord renders "#"/"##"/"###" as real headings -- a noticeably larger font
-# plus its own extra top/bottom margin, on top of whatever blank line
-# already precedes it. Verified live: an answer whose raw text had exactly
-# one blank line before every "### Scenario ..." heading still looked like
-# two blank lines' worth of gap once Discord applied its own heading margin.
-# The web frontend has no markdown renderer at all (MessageBubble.tsx renders
-# message.text as a plain string) -- "###" and "**" both already show as
-# literal characters there, so demoting headings to bold text is a pure win
-# for Discord with no downside on the web UI.
+# Markdown headings are a liability for a client-agnostic API: a client that
+# renders markdown (e.g. Discord) turns "#"/"##"/"###" into a noticeably
+# larger font plus its own extra top/bottom margin on top of whatever blank
+# line already precedes it -- verified live on one such client, an answer
+# whose raw text had exactly one blank line before every "### Scenario ..."
+# heading still looked like two blank lines' worth of gap once that extra
+# margin applied. A client with no markdown renderer at all (this repo's own
+# dev test UI included, for headings specifically) shows "###" as literal
+# characters instead -- so demoting headings to bold text is a pure win on
+# a renderer, and a no-op either way on a client that shows raw text.
 _MARKDOWN_HEADING_PATTERN = re.compile(r"^#{1,6}[ \t]*(.+)$", re.MULTILINE)
 
-# Neither Discord nor the web frontend render LaTeX -- both just show the raw
-# markup as text (verified live: a commander-tax calculation came back with a
+# Most chat clients don't render LaTeX at all -- it just shows up as raw
+# markup (verified live: a commander-tax calculation came back with a
 # literal "$\times$" in the middle of a sentence). The prompt tells the model
 # to use plain arithmetic notation instead, but that's not reliable enough on
 # its own for a model that defaults to LaTeX conventions for anything
@@ -371,13 +373,13 @@ def _clean_answer(answer: str) -> str:
     return _truncate_repetition(answer)
 
 
-# Catches a real, observed failure mode distinct from Discord-side markdown
-# corruption: the model itself degenerating into repeating the same block of
+# Catches a real, observed failure mode distinct from client-side rendering
+# quirks: the model itself degenerating into repeating the same block of
 # text over and over until it hits num_predict, rather than terminating --
 # seen live on a "combos with devoted druid?" query, which came back as the
-# same sentence fragment repeated dozens of times, growing across several
-# 2000-char Discord chunks. Prompt tightening reduces how often this
-# triggers but can't guarantee it never does, so this is a deterministic
+# same sentence fragment repeated dozens of times. Prompt tightening reduces
+# how often this triggers but can't guarantee it never does, so this is a
+# deterministic
 # backstop: any run of the same >=12-char substring repeated 3+ times in a
 # row gets truncated at the first occurrence, regardless of provider/model.
 # 12 chars keeps this from firing on legitimate short repeated markup
@@ -539,15 +541,25 @@ class MTGJudgeAgent:
         ]
 
     async def query(self, user_query: str, thread_id: str) -> dict[str, Any]:
-        config = {"configurable": {"thread_id": thread_id}}
+        # recursion_limit caps the model<->tool back-and-forth at a fixed
+        # number of steps -- without it, create_agent's compiled graph has no
+        # bound of its own (confirmed live: a run that never converges makes
+        # unbounded real LLM calls, not a small bounded number, and never
+        # raises GraphRecursionError on its own). 50 steps is generous
+        # headroom for a legitimately complex multi-tool-call question
+        # (~25 tool round-trips, each a model-node + tool-node step pair)
+        # while still turning a genuine non-convergent loop into a fast,
+        # cheap GraphRecursionError -- caught below and returned as a normal
+        # error response -- instead of an open-ended cost/latency sink.
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
         # A checkpointed thread_id makes ainvoke() return the FULL accumulated
         # message history for that thread, not just this turn's messages --
-        # verified live: a Discord channel's shared thread_id (see
-        # discord_client's _conversation_id_for) meant an unrelated later
-        # question came back citing a card's rulings from an earlier,
-        # unrelated question in the same channel. pre_len + slicing (same
-        # fix stream_tokens() already used) isolates sources to only tool
-        # calls made answering *this* query.
+        # verified live: a client that scopes one thread_id to a shared
+        # channel/room (multiple users, multiple questions) meant an unrelated
+        # later question came back citing a card's rulings from an earlier,
+        # unrelated question in the same thread. pre_len + slicing (same fix
+        # stream_tokens() already used) isolates sources to only tool calls
+        # made answering *this* query.
         pre_state = await self._agent.aget_state(config)
         pre_len = len(pre_state.values.get("messages", []))
         try:
@@ -586,7 +598,8 @@ class MTGJudgeAgent:
         citations from leaking into this turn's sources. Yields tuples rather
         than storing state on self, since the module-level judge_agent
         singleton is shared across concurrent requests."""
-        config = {"configurable": {"thread_id": thread_id}}
+        # See query()'s identical config for why recursion_limit is set explicitly.
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
         pre_state = await self._agent.aget_state(config)
         pre_len = len(pre_state.values.get("messages", []))
         answer_parts: list[str] = []

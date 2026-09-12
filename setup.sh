@@ -78,28 +78,23 @@ set_env_var() {
   local key="$1" value="$2" escaped
   escaped=$(printf '%s' "${value}" | sed -e 's/[\\&|]/\\&/g')
   if grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${escaped}|" "${ENV_FILE}"
+    # `-i.bak` (with a suffix), not bare `-i`: GNU sed accepts either, but
+    # BSD/macOS sed's -i requires an extension argument -- bare `-i` there
+    # consumes the next argument as the extension instead of editing in
+    # place, corrupting the very next `sed` invocation's args. `.bak` works
+    # identically on both, so the backup file is just deleted right after.
+    sed -i.bak "s|^${key}=.*|${key}=${escaped}|" "${ENV_FILE}"
+    rm -f "${ENV_FILE}.bak"
   else
     printf '%s=%s\n' "${key}" "${value}" >> "${ENV_FILE}"
   fi
 }
 
-# Appends VALUE into KEY's comma-separated list in .env if not already
-# present -- used for DISCORD_API_KEY, which needs to land in its own var
-# AND in the shared API_KEYS allowlist (see .env.example's comment on it).
-append_env_csv_value() {
-  local key="$1" value="$2" current
-  [[ -z "${value}" ]] && return
-  current="$(get_env_var "${key}" "")"
-  if [[ ",${current}," == *",${value},"* ]]; then
-    return
-  fi
-  if [[ -z "${current}" ]]; then
-    set_env_var "${key}" "${value}"
-  else
-    set_env_var "${key}" "${current},${value}"
-  fi
-}
+# Portable lowercase -- not `${var,,}`, which is a bash 4+ only expansion.
+# macOS ships bash 3.2 by default (Apple froze it there over GPLv3), so
+# `${var,,}` fails there with "bad substitution" unless the user has
+# separately installed a newer bash and put it ahead of /bin/bash on PATH.
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 VENV_DIR=".venv"
 OLLAMA_URL="http://localhost:11435"
@@ -153,7 +148,7 @@ else
   choice="${CURRENT_LLM_PROVIDER:0:1}"
 fi
 
-case "${choice,,}" in
+case "$(lower "${choice}")" in
   h)
     set_env_var LLM_PROVIDER hosted
     LLM_PROVIDER=hosted
@@ -210,7 +205,7 @@ else
   choice="${CURRENT_EMBED_PROVIDER:0:1}"
 fi
 
-case "${choice,,}" in
+case "$(lower "${choice}")" in
   h)
     set_env_var EMBEDDING_PROVIDER hosted
     if [[ "${INTERACTIVE}" == true ]]; then
@@ -324,51 +319,15 @@ if [[ "${INTERACTIVE}" == true ]]; then
   info "Local dev only -- rules-mcp/scryfall-mcp/searxng in Docker, the"
   info "                  backend runs directly on this host (./run_bot.sh),"
   info "                  reachable at http://localhost:8000. No Caddy, no"
-  info "                  webapp, no public exposure."
-  info "Full deployment -- adds Caddy, which serves the built web app and"
-  info "                  reverse-proxies the API on one public-facing"
-  info "                  origin (needed for the PWA, a Cloudflare Tunnel,"
-  info "                  or direct TLS). The webapp is baked into the same"
-  info "                  image as Caddy, so the two ship together."
+  info "                  public exposure."
+  info "Full deployment -- adds Caddy, a bare reverse proxy in front of the"
+  info "                  backend, for a real domain/TLS or fronting it with"
+  info "                  a tunnel of your own. Build your own client (web,"
+  info "                  Discord, Telegram, whatever) against /chat and"
+  info "                  /chat/stream -- this repo only ships the backend."
   read -r -p "Use [D]ev-only or [F]ull deployment? [D]: " choice
   choice="${choice:-d}"
-  [[ "${choice,,}" == "f" ]] && FULL_DEPLOYMENT=true
-fi
-
-DISCORD_ENABLED=false
-if [[ "${FULL_DEPLOYMENT}" == true && "${INTERACTIVE}" == true ]]; then
-  step "Discord bot (optional)"
-  info "Independent of Caddy/webapp -- it's a separate container that calls"
-  info "the public API over HTTP and never needs to be publicly reachable"
-  info "itself (Discord pushes it events over an outbound connection it"
-  info "opens itself)."
-  read -r -p "Enable the Discord bot? [y/N]: " choice
-  if [[ "${choice,,}" == "y" ]]; then
-    DISCORD_ENABLED=true
-    while true; do
-      read -r -s -p "Discord bot token: " token; echo
-      [[ -n "${token}" ]] && break
-      warn "A bot token is required to enable the Discord bot."
-    done
-    set_env_var DISCORD_BOT_TOKEN "${token}"
-
-    current_discord_key="$(get_env_var DISCORD_API_KEY "")"
-    if [[ -n "${current_discord_key}" ]]; then
-      discord_key="${current_discord_key}"
-      info "Reusing existing DISCORD_API_KEY."
-    else
-      discord_key="$("${VENV_DIR}/bin/python" -c 'import secrets; print(secrets.token_hex(24))')"
-      info "Generated a dedicated DISCORD_API_KEY (tracks the bot's usage"
-      info "separately from the keyless/anonymous tier)."
-    fi
-    set_env_var DISCORD_API_KEY "${discord_key}"
-    append_env_csv_value API_KEYS "${discord_key}"
-
-    read -r -p "Public API base URL the bot should call [https://azor.delta43.net]: " api_base
-    set_env_var DISCORD_API_BASE_URL "${api_base:-https://azor.delta43.net}"
-    ok "Discord bot configured. Restrict it to specific servers/channels"
-    info "later via DISCORD_ALLOWED_GUILD_IDS/DISCORD_ALLOWED_CHANNEL_IDS in .env."
-  fi
+  [[ "$(lower "${choice}")" == "f" ]] && FULL_DEPLOYMENT=true
 fi
 
 # --- Summary --------------------------------------------------------------
@@ -393,15 +352,10 @@ if [[ "${FULL_DEPLOYMENT}" == true ]]; then
   echo "Next: bring up the full stack (rules-mcp/scryfall-mcp/searxng pull in"
   echo "automatically via depends_on):"
   echo ""
-  if [[ "${DISCORD_ENABLED}" == true ]]; then
-    echo "    ${COMPOSE} --profile discord up -d --build mtg-judge caddy discord-bot"
-  else
-    echo "    ${COMPOSE} up -d --build mtg-judge caddy"
-  fi
+  echo "    ${COMPOSE} up -d --build mtg-judge caddy"
   echo ""
-  echo "Caddy will be reachable on :80/:443. For real public exposure without"
-  echo "opening a port, see docs/DESCRIPTION.md's Cloudflare Tunnel section"
-  echo "(--profile tunnel) -- not part of this installer."
+  echo "Caddy will be reachable on :8877 (loopback by default -- see"
+  echo "Caddyfile / docker-compose.yml to expose it or add TLS/a domain)."
 else
   echo "Next:"
   echo ""

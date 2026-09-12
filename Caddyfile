@@ -1,0 +1,15 @@
+# Config for the optional `caddy` compose service (bare `caddy:2` image, no
+# build -- see docker-compose.yml). Forwards every path to mtg-judge, which
+# already serves its own zero-build dev test UI at `/` (app_api/main.py's
+# serve_index()) plus /chat, /chat/stream, /health, /metrics -- there's no
+# static frontend to serve here, so there's no `root * /srv` / try_files /
+# file_server block, and nothing to build.
+#
+# Plain `:80`, not a domain: this is the right config for a deployment
+# fronted by a tunnel that terminates TLS itself (Cloudflare Tunnel, etc.),
+# or for pure local/loopback use. Swap the block below for your real domain
+# (Caddy will provision/renew TLS automatically) if exposing this directly
+# to the internet instead.
+:80 {
+	reverse_proxy mtg-judge:8000
+}

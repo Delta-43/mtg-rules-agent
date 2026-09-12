@@ -1,11 +1,10 @@
 # server/
 
-The backend product: the FastAPI app, the tool-calling agent, and the two
-MCP sub-services it talks to. This is the "server" module in the
-`server/` / `discord_client/` / `webapp/` / `ops/` split — see the root
-`CLAUDE.md` for full architecture detail and the non-obvious "why" behind
-things; this file is just the orientation a new contributor to *this*
-module needs, and doesn't duplicate that.
+The whole product: the FastAPI app, the tool-calling agent, and the two
+MCP sub-services it talks to. See the root `CLAUDE.md` for full
+architecture detail and the non-obvious "why" behind things; this file is
+just the orientation a new contributor to *this* module needs, and
+doesn't duplicate that.
 
 **Current status and what's left to do:** see [`STATUS.md`](STATUS.md).
 
@@ -17,11 +16,7 @@ module needs, and doesn't duplicate that.
   factory (`llm_provider.py`), the in-process `web_search` tool.
 - `core_config/` — this module's own config loader (YAML-first,
   env-override) — reads `project_config.yml` in this same directory.
-  `metrics.py` holds shared Prometheus metric definitions (see
-  `docs/OBSERVABILITY_PLAN_V2.md`).
-- `accounts_db/` — SQLAlchemy models + Alembic migration for the future
-  accounts/tiers/billing pivot (see root `docs/PLAN.md`). Not imported by
-  `app_api` yet — Phase 0 scaffolding only.
+  `metrics.py` holds shared Prometheus metric definitions.
 - `rules_mcp/` — standalone MCP server (semantic search over the MTG
   Comprehensive Rules). **Self-contained by design** — no imports from
   anywhere else in this repo, own `settings.py`/`requirements.txt`/
@@ -43,10 +38,11 @@ module needs, and doesn't duplicate that.
 
 ## Running
 
-**Full stack (Docker):** from the repo root, `docker-compose up --build`
-(or the profile-scoped subset — see root `README.md`). `docker-compose.yml`
-builds this directory as `mtg-judge`'s image (`build: ./server`) and
-`rules_mcp`/`scryfall_mcp` each as their own image
+**Full stack (Docker):** from the repo root,
+`docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng`
+(add `caddy` for a reverse-proxy front door — see root `README.md`).
+`docker-compose.yml` builds this directory as `mtg-judge`'s image
+(`build: ./server`) and `rules_mcp`/`scryfall_mcp` each as their own image
 (`build: ./server/rules_mcp`, `build: ./server/scryfall_mcp`).
 
 **Hybrid dev (host-run backend, Dockerized MCP servers):** `./run_bot.sh`
@@ -71,14 +67,3 @@ see their own READMEs. `rules_mcp`'s `python -m rules_mcp.server` needs
 its cwd to be `server/` (its parent directory) since `rules_mcp` resolves
 as a Python package from there, same reasoning as the `PYTHONPATH=server`
 note above.
-
-## Why this module holds what it holds
-
-`accounts_db/` might look like it belongs with a future "hosted mode"
-rather than the generic backend — it doesn't move out, because
-`ACCOUNTS_MODE` is designed as an opt-in capability any self-hoster could
-turn on for their own instance, not something specific to one hosted
-deployment. See root `docs/PUBLISHING_PLAN.md`'s "Why the repo splits the way
-it does" for the actual dividing line used across this whole reorg
-(secrets/instance-identity vs. product code) if you're wondering why
-something else did or didn't land here.

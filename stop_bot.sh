@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Automatically switch to docker group if member but session does not have it active yet
+# Automatically switch to docker group if member but session does not have it
+# active yet. `getent`/`sg` are Linux-specific and deliberately guarded behind
+# `command -v` -- macOS (Docker Desktop) and other platforms without them
+# simply skip this and rely on `docker info` having already succeeded above.
 if ! docker info >/dev/null 2>&1; then
-  if getent group docker | grep -qw "${USER:-$(whoami)}"; then
+  if command -v getent >/dev/null 2>&1 && command -v sg >/dev/null 2>&1 \
+      && getent group docker | grep -qw "${USER:-$(whoami)}"; then
     exec sg docker -c "$0 $*"
   fi
 fi

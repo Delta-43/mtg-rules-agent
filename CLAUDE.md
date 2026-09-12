@@ -15,17 +15,18 @@ tool result, it's instructed to say so rather than guess.
 This file is oriented toward things that aren't obvious from reading one file at
 a time.
 
-Each top-level module (`server/`, `discord_client/`, `webapp/`, `ops/`,
-`shared/`) has a `STATUS.md` alongside its `README.md` — a short,
-consistently-structured snapshot (project-wide summary, that module's
-current status/features, what's left to do), meant for a developer who
-wants "where does this stand right now" without reading `docs/PLAN.md`/
-`docs/TODO.md`'s full history. **Update the relevant module's `STATUS.md`
-whenever a change meaningfully shifts what's true there** (a feature
-lands, something moves from planned to live, a new gap is found) — it's
-easy for these to silently go stale the way `docs/PLAN.md`'s "Frontend
-visual design pass" line once did (see git history), and they exist
-specifically so that doesn't happen quietly.
+This repo is the reply server only — the agent, the API, and the rules/card
+data tools. It ships no bundled client; whoever deploys it brings their own
+(web, Discord, Telegram, CLI, anything) and talks to it over `/chat`/
+`/chat/stream`.
+
+`server/` has a `STATUS.md` alongside its `README.md` — a short,
+consistently-structured snapshot (current status/features, what's left to
+do), meant for a developer who wants "where does this stand right now"
+without reading git history. **Update it whenever a change meaningfully
+shifts what's true there** (a feature lands, something moves from planned
+to live, a new gap is found) — it exists specifically so that doesn't go
+stale quietly.
 
 ## Commands
 
@@ -46,14 +47,15 @@ fork this repo actively modifies (see the Scryfall section below), so new
 tools added there should get a matching test.
 
 **Both are wired into CI now** (`.github/workflows/server-ci.yml`,
-`scryfall-mcp-ci.yml`), one workflow per module plus a package-wide one
-(`compose-validate.yml`) -- see `docs/PUBLISHING_PLAN.md`'s Stage 0 for
-the full list and what's still genuinely uncovered (`rules_mcp` still has
-no fixture-based correctness test, only an import smoke test).
+`scryfall-mcp-ci.yml`), plus a package-wide `compose-validate.yml` and a
+`beginner-setup-smoke-test.yml` that runs the real `./setup.sh`/`./run_bot.sh`
+path end-to-end on a clean runner -- what's still genuinely uncovered:
+`rules_mcp` still has no fixture-based correctness test, only an import
+smoke test.
 
-Full Docker deployment (all five services incl. Caddy):
+Full Docker deployment:
 ```bash
-docker-compose up --build
+docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng caddy
 ```
 
 `server/rules_mcp/` is a separate, independently runnable service (no imports from the
@@ -66,10 +68,10 @@ invocation itself is unaffected, only its required working directory moved).
 ## Architecture
 
 ```text
-Client -> Caddy -> FastAPI (server/app_api/main.py) -> tool-calling agent (server/llm_agent/agent.py)
-                                                    |-- rules-mcp (MCP/HTTP): search_rules, get_rule_by_id
-                                                    |-- scryfall-mcp (MCP/HTTP): 16 tools, incl. get_card_rulings
-                                                    `-- web_search (in-process @tool: SearXNG + trafilatura)
+Client -> [Caddy, optional] -> FastAPI (server/app_api/main.py) -> tool-calling agent (server/llm_agent/agent.py)
+                                                               |-- rules-mcp (MCP/HTTP): search_rules, get_rule_by_id
+                                                               |-- scryfall-mcp (MCP/HTTP): 16 tools, incl. get_card_rulings
+                                                               `-- web_search (in-process @tool: SearXNG + trafilatura)
 ```
 
 **Rule citations are verified, not just requested.** The system prompt
@@ -249,40 +251,31 @@ plain string) don't have this problem — empty is a valid value for them.
 **Anonymous rate-limit/quota bucketing needs the real client IP, not the
 raw socket peer** — `app_api/main.py`'s `_client_ip()` exists specifically
 because `slowapi`'s `get_remote_address()` reads `request.client.host`,
-which for any request proxied through Caddy is always Caddy's own
-container IP (the last hop), never the actual visitor. Found live: every
-anonymous request landed in the exact same `usage_counters` bucket
-(Caddy's bridge IP, confirmed via `docker network inspect`) regardless of
+which for any request proxied through a reverse proxy or tunnel is always
+that proxy's own IP (the last hop), never the actual visitor. Found live
+on a deployment fronted by Cloudflare: every anonymous request landed in
+the exact same `usage_counters` bucket (the proxy's own IP) regardless of
 which real IP made it — meaning the documented "per-visitor" anonymous
 daily quota and per-minute rate limit were, in practice, one shared pool
 across every anonymous visitor combined. `_client_ip()` prefers
 `CF-Connecting-IP` (set by Cloudflare's own edge on every tunneled
 request, and overwritten by Cloudflare regardless of what a client sends,
-so it can be trusted for traffic that genuinely came through the tunnel),
-then the first hop of `X-Forwarded-For`, then falls back to the raw
-socket peer for non-proxied access (host-run dev via `run_bot.sh`). Caddy
-doesn't need any config change for this — `reverse_proxy` already passes
-headers through unmodified. This only holds if Caddy is reachable *only*
-through the tunnel, which is worth checking on any deployment: this
-host's `docker-compose.override.yml` had `caddy` bound to `0.0.0.0` (every
-interface) while every other service in that same file was already
-`127.0.0.1`-only — pure unnecessary exposure, since `cloudflared`
-(`network_mode: host`) reaches Caddy via `localhost` regardless of
-whether it's bound to `0.0.0.0` or loopback-only. Rebound to `127.0.0.1`;
-verified the host's real LAN-facing IP can no longer reach Caddy at all
-while the real public path through the tunnel still works end-to-end.
-`docker-compose.yml`'s `caddy` service definition itself still publishes
-80/443 broadly (correct for a generic self-hoster who wants LAN/direct
-access) — this specific tightening is a host-local `docker-compose.override.yml`
-concern, not a change to the base compose file every deployment gets.
+so it can be trusted for traffic that genuinely came through a Cloudflare
+tunnel/proxy), then the first hop of `X-Forwarded-For`, then falls back to
+the raw socket peer for non-proxied access (host-run dev via `run_bot.sh`).
+Whatever reverse proxy you put in front of this (Caddy, nginx, a tunnel)
+needs to pass those headers through unmodified, and needs to itself be
+unreachable except through your actual public path — otherwise a client
+could set its own `CF-Connecting-IP`/`X-Forwarded-For` and spoof this
+check entirely. If you're not fronting this with Cloudflare specifically,
+adjust `_client_ip()`'s header preference to match whatever your own
+proxy/tunnel sets.
 
-**Observability (Crawl phase) is implemented per `docs/OBSERVABILITY_PLAN_V2.md`
-(Nacho Catrileo) — endpoints only, not per-tool-call metrics; that split
+**Observability is endpoints only, not per-tool-call metrics; that split
 is deliberate, not partial work left mid-stream.** `server/app_api/main.py`
-exposes `GET /metrics` via `prometheus-fastapi-instrumentator`;
-`discord_client/bot.py` runs a second, independent one on `:9100` via a
-plain `prometheus_client.start_http_server()`. A few things worth knowing
-before touching either:
+exposes `GET /metrics` via `prometheus-fastapi-instrumentator` — point
+your own Prometheus (or compatible scraper) at it; no monitoring stack is
+bundled with this repo. A few things worth knowing before touching it:
 - **The exclusion-pattern anchor matters.** `Instrumentator`'s
   `excluded_handlers` matches via `re.search`, not an exact-path match —
   an unanchored `"/"` (meant to exclude just the literal root path) would
@@ -290,44 +283,29 @@ before touching either:
   contain `"/"`, silently zeroing `http_requests_total` for all real
   traffic while `/metrics` itself still looks fine on a quick check. Use
   `"^/$"`, not `"/"`, in that list — this exact regression is what
-  `server/tests/test_metrics.py`'s anchored-regex test guards against, and
-  is why V1 of the observability plan got superseded by V2 in the first
-  place (verified directly against the instrumentator's middleware
-  source, not assumed).
+  `server/tests/test_metrics.py`'s anchored-regex test guards against
+  (verified directly against the instrumentator's middleware source, not
+  assumed).
 - **`http_streaming_ttft_seconds` (`core_config/metrics.py`), not the
   default `http_request_duration_seconds`, is the real perceived-latency
   metric for `/chat/stream`.** The default histogram times the entire SSE
   connection lifetime for a streaming route, not "time to respond" in any
   useful sense — don't read `http_request_duration_seconds{handler="/chat/stream"}`
   as a normal latency number later.
-- **`discord-bot` is attached to `mtg-network` now, but only for this.**
-  Its own design (see "`discord_client/` is an independent, self-contained
-  client" below) deliberately keeps it off that network and pointed at the
-  backend's public URL so it works identically colocated or run elsewhere
-  entirely — the network attachment here is scoped narrowly (Prometheus
-  scraping `discord-bot:9100` by Docker DNS when colocated) and doesn't
-  touch how it actually calls the API. This is a deliberate, narrow
-  reversal of that design, not a silent one — flagged as needing sign-off
-  from whoever owns the original decision (see `docs/TODO.md`), not
-  assumed settled just because it's implemented.
 - **Per-tool-call metrics (`agent_tool_calls_total`/`agent_tool_duration_seconds`,
   a `ToolMetricsCallback` on `llm_agent/agent.py`'s two `config`-building
-  call sites) are NOT implemented.** This isn't an oversight — it's the
-  one piece of the V2 plan its own verification section flags as checked
-  against `langchain-core`'s callback *signatures* in isolation, never run
-  against a live `agent.astream()`. Scoped as separate follow-up work.
-  `ops/monitoring/prometheus/rules/slo_rules.yml`'s `HighToolFailureRate`
-  alert already exists and will start working the moment that metric is
-  emitted — it's inert (no data), not broken, until then. Don't add tool
+  call sites) are NOT implemented.** Scoped as separate follow-up work; the
+  design was checked against `langchain-core`'s callback *signatures* in
+  isolation but never run against a live `agent.astream()`. Don't add tool
   metrics by mutating tool instances directly if you do pick this up —
   `langchain-mcp-adapters` tools are Pydantic `BaseTool` instances, which
   reject arbitrary attribute assignment (`tool.ainvoke = wrapped` raises
   `ValueError`, confirmed directly against this repo's installed
   `langchain-core`); a callback passed via `config["callbacks"]` is the
   approach that actually works here, not a per-tool wrapper.
-- `Caddyfile`'s `@api` matcher never lists `/metrics`, so it already 404s
-  through the public path with zero Caddy changes — don't add a Caddy rule
-  "just to be safe," there's nothing to fix there.
+- If you put Caddy (or any reverse proxy) in front of this, make sure its
+  routing rule for the public path doesn't accidentally also expose
+  `/metrics` — it should stay loopback/internal-network only.
 
 **LLM provider is pluggable**: `llm_provider.build_chat_model()` returns either
 `ChatOllama` (`LLM_PROVIDER=local`) or `ChatOpenAI` pointed at OpenRouter
@@ -378,103 +356,23 @@ not project-specific scripting. This used to be a bigger axis of complexity
 (separate CPU/GPU launcher scripts) before the default model moved to a cloud
 model that doesn't need local GPU/CPU inference for chat at all.
 
-**`caddy` is the only service actually coupled to `webapp/`** — `mtg-judge`
-itself has zero dependency on it. `caddy`'s image (`webapp/Dockerfile`)
-multi-stage-builds the PWA and bakes it into the same Caddy image that
-reverse-proxies the API, which is why a plain `docker-compose up --build`
-always needs Node/`webapp/` even for someone who only wants the API. For a
-webapp-free local deployment: `mtg-judge` publishes `127.0.0.1:8000`
-directly (same loopback convention as `rules-mcp`/`scryfall-mcp`/`searxng`),
-and a separate opt-in `caddy-local` service (bare `caddy:2`, no build,
-`Caddyfile.local`) gives a reverse-proxy front door with no `webapp/`
-dependency at all, for anyone who still wants one (a real domain/TLS).
-Two things worth knowing if you touch this:
-- **Naming services explicitly on the CLI is what actually keeps `caddy`/
-  `webapp/` out of it** (`docker compose up -d --build mtg-judge rules-mcp
-  scryfall-mcp searxng [caddy-local]`), not activating the `local` profile
-  alone — `caddy` has no `profiles:` key, so it's a default service that
-  still starts (and still needs to build `webapp/`) regardless of which
-  `--profile` flags are active, unless you avoid naming it.
-- **`caddy-local`'s host port is 8877, loopback-only** — deliberately not
-  8080 or 8090, both of which turned out to already be taken by unrelated
-  containers on the host this was verified against (the same class of
-  per-host port conflict already documented for `searxng`/`scryfall-mcp`/
-  `caddy` in `docs/PLAN.md`'s "Local deployment notes" — remap again in
-  your own `docker-compose.override.yml` if 8877 also collides on yours).
-  Loopback-only by default (unlike the main `caddy` service's open
-  80/443) since this is explicitly the local-use path; override to
-  `0.0.0.0` in an override file if you actually want it reachable off-host.
-- This was chosen deliberately over forking a separate long-lived "local"
-  branch with `webapp/`/`discord_client/` stripped out (considered, then
-  rejected — it would diverge from `main` on every `server/` change,
-  needing manual cherry-picks forever to stay current). `discord_client/`
-  needed no equivalent fix — it was already fully opt-in via
-  `--profile discord`.
+**`caddy` is an optional, unopinionated reverse proxy in front of `mtg-judge`**
+— a bare `caddy:2` image (`Caddyfile`), no build step, no bundled
+frontend baked in. `mtg-judge` itself has zero dependency on it: it
+publishes `127.0.0.1:8000` directly (same loopback convention as
+`rules-mcp`/`scryfall-mcp`/`searxng`), so `caddy` only matters if you want
+a reverse-proxy front door (a real domain/TLS) in front of it. To skip it
+entirely, just don't include it in the service list:
+`docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng`.
+Add `caddy` to that list, edit `Caddyfile` for your own domain, and
+put your own tunnel/reverse-proxy of choice in front of it (or of
+`mtg-judge` directly) if you don't want Caddy specifically.
 
-**`discord_client/` is an independent, self-contained client** — a single
-`/judge` slash command that calls the public backend's `POST /chat` (never
-`/chat/stream`; coalescing streamed tokens into Discord message edits fights
-Discord's own edit rate limits) and posts the answer back. Like `server/rules_mcp/`,
-it deliberately doesn't import `llm_agent`/`app_api` — it's a thin REST
-client hitting the same public URL any other caller would use
-(`DISCORD_API_BASE_URL`, e.g. `https://azor.delta43.net`), authenticated with
-its own dedicated entry in the backend's `API_KEYS` so its usage is tracked
-independently of the PWA's keyless traffic. Full setup/deployment detail
-lives in `discord_client/README.md`; this is just what isn't obvious from
-reading `bot.py` alone.
-
-Branding is split across two genuinely different things, easy to conflate:
-the Discord **Application** (name "MTG Azor", icon, and the Terms of
-Service/Privacy Policy URLs required for public listing — all set manually
-in the Developer Portal's General Information tab, not reachable via the bot
-token API) versus the bot **account** (username "Azor, High Arbiter" +
-avatar, set via `discord_client/set_branding.py`, a one-off script using
-`client.login()` only — no gateway connection needed for a REST-only profile
-edit, and Discord rate-limits username changes to a couple per hour so this
-is never run on every boot).
-
-**Mana symbols render as real icons, not `{W}`/`{T}` text**, via Discord
-**application emojis** (not guild emojis — the set is 88 icons, matching
-every file in `shared/assets/mana_symbols/` one-for-one, which would blow past a
-single guild's emoji slot limit; application emojis have no such cap and
-work across every server the bot is in). `bot.py`'s `JudgeBot.setup_hook()`
-calls `fetch_application_emojis()` once at startup and caches a `name -> id`
-map on the client (`self.mana_emojis`); `_render_mana_symbols()` then
-rewrites every `{X}` in the answer into `<:name:id>` markup. The name
-mapping needs no hardcoded per-symbol table: it's just `"mana" +
-X.replace("/", "").lower()`, which happens to exactly match how the emoji
-set was named after `shared/assets/mana_symbols/mana-*.png` (dashes stripped, since
-Discord emoji names can't contain them) — e.g. `{T}` -> `manat`, `{2/W}` ->
-`mana2w`, `{B/G/P}` -> `manabgp`. `{100}`/`{1000000}` are the one exception
-(aliased to their first font variant; no plain `mana100` file exists). Any
-symbol not in the map (fetch failed, or a genuinely obscure one) falls back
-to the literal `{X}` text rather than breaking the reply. Skips text inside
-a ``` fenced code block entirely, since Discord never renders custom emoji
-there anyway.
-
-**Tables render as Discord embeds, not a fenced monospace grid.** Discord
-has no GFM pipe-table rendering at all — an unhandled table shows up as a
-jumbled run of `|`/`-` characters. The first fix (since replaced) reflowed a
-table into column-aligned plain text inside a ``` fence; that looked
-visually flat, broke `**bold**`/mana-emoji rendering inside cells (neither
-renders inside a code fence), and was explicitly disliked once compared
-side-by-side against an embed. `_build_table_embed()` now turns each table
-into a `discord.Embed` (bordered card, accent color `0xE94560` matching the
-PWA's `--accent`), one field per data row: the first column becomes the
-field name (with `->` normalized to a real `→` arrow), the remaining
-columns become a bulleted list in the field value — a deliberate "flowchart
-node" look, confirmed live against a real example before being wired in.
-`_send_answer()` (not a single `_chunk_message()` call anymore) is what
-makes this possible: it walks the answer via `_split_text_and_tables()` and
-sends prose and embeds as separate, correctly-ordered `followup.send()`
-calls, since an embed can't be inlined into the middle of a text message. A
-table that doesn't fit an embed's limits (25 fields, 256/1024 char caps)
-falls back to the old fenced grid (`_render_table()`, kept only for this)
-rather than silently dropping content.
-
-**Real Discord testing surfaced several `server/llm_agent/agent.py` hardening
-fixes that benefit every caller, not just Discord** (the PWA gets them too,
-since they live in the shared agent, not `discord_client/`):
+**Several client-facing `server/llm_agent/agent.py` hardening fixes were
+found via real usage against multiple different client implementations
+before those clients were split out of this repo** — they live in the
+shared agent, so every caller benefits regardless of what client talks to
+it:
 - The model would answer questions with nothing to do with Magic (bare
   arithmetic, algebra, "how much is 1+1") instead of declining — the
   generic "decline off-topic questions" instruction was one buried sentence
@@ -490,25 +388,22 @@ since they live in the shared agent, not `discord_client/`):
   after stripping markdown punctuation, regardless of how the model
   formatted it, so the app's own standardized citation display (built from
   `sources`, not from the model's prose) is never duplicated.
-- `MTGJudgeAgent.query()` (the non-streaming path `/chat` uses — i.e. every
-  Discord reply) used to extract `sources` from a checkpointed thread's
-  *entire* message history, not just the current turn's tool calls — since
-  Discord scopes conversation memory per-channel (`discord-channel-<id>`,
-  everyone in a channel shares one thread), an unrelated later question in
-  the same channel would come back citing an earlier question's card
-  rulings. Fixed by scoping to `messages[pre_len:]` (`pre_len` = message
-  count before this turn's `ainvoke()`), the same technique `stream_tokens()`
-  already used.
+- `MTGJudgeAgent.query()` (the non-streaming path `/chat` uses) used to
+  extract `sources` from a checkpointed thread's *entire* message history,
+  not just the current turn's tool calls — a client that scopes one
+  `thread_id` to a shared channel/room (everyone in it sharing one thread)
+  would get an unrelated later question coming back citing an earlier
+  question's card rulings. Fixed by scoping to `messages[pre_len:]`
+  (`pre_len` = message count before this turn's `ainvoke()`), the same
+  technique `stream_tokens()` already used.
 - The model sometimes wrote real LaTeX (`$2 \times 3$`, `\frac{12}{5}`) for
   plain arithmetic, and sometimes used markdown `### headings` — neither
-  renders in Discord (shows as literal garbled text) or the web frontend
-  (`MessageBubble.tsx` renders `message.text` as a raw string with no
-  markdown parser at all, so both already show as literal characters
-  there — meaning demoting headings to `**bold**` is a pure win with no
-  frontend downside). `_delatex()` and the heading-to-bold substitution in
-  `_clean_answer()` fix both deterministically; the system prompt also asks
-  the model not to do either, but isn't trusted alone for the same reason
-  citations and the trailing block aren't.
+  renders as intended in a plain-text client that doesn't run a markdown
+  parser over `message.text` (shows as literal garbled characters instead).
+  `_delatex()` and the heading-to-bold substitution in `_clean_answer()`
+  fix both deterministically; the system prompt also asks the model not to
+  do either, but isn't trusted alone for the same reason citations and the
+  trailing block aren't.
 - A model occasionally degenerates into repeating the same text fragment
   until it hits `LLM_NUM_PREDICT` instead of terminating (seen live on a
   "combos with X" card-interaction question). `_truncate_repetition()` is a
@@ -520,3 +415,23 @@ since they live in the shared agent, not `discord_client/`):
   prompt now explicitly asks it to work through multi-step calculations
   completely before writing anything down and present one final answer,
   never a visible correction.
+
+**`query()`/`stream_tokens()` set an explicit `recursion_limit` (50) on the
+agent's config -- without it, `create_agent`'s compiled graph has no bound of
+its own.** Found live: a plain "What is trample?" question against
+`gemma4:cloud` never converged on a final answer -- the model kept calling
+`search_rules` again instead of stopping, and this ran for over 700 real
+Ollama Cloud calls (~8 minutes) before being killed by hand, with no
+`GraphRecursionError` ever firing to end it. That's not a cosmetic slowdown
+on a hosted deployment -- it's unbounded real inference cost/latency per
+pathological query, and no amount of prompt tuning can guarantee a model
+never hits this. With `recursion_limit` set, the identical query now fails
+fast and cheaply instead (~21s, 25 real model calls, a clean
+`GraphRecursionError` caught by the existing `except Exception` handler in
+both methods and returned as the same generic error response callers already
+handle) -- 50 is picked as generous headroom for a legitimately complex
+multi-tool-call question (each real tool round-trip is a model-node + a
+tool-node step, so ~25 round-trips) while turning a genuine non-convergent
+loop into a bounded failure instead of an open-ended one. If real usage ever
+needs more than 25 tool round-trips for a legitimate question, raise this --
+don't remove it.

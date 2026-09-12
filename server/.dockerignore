@@ -1,0 +1,12 @@
+# mtg-judge's build context is ./server, but its Dockerfile only COPYs the
+# specific paths it needs -- this just keeps the context sent to the Docker
+# daemon small and fast, since rules_mcp/ and scryfall_mcp/ are separate
+# build contexts (each has its own Dockerfile) and don't belong in this image.
+rules_mcp/
+scryfall_mcp/
+tests/
+searxng/
+__pycache__/
+*.pyc
+.venv/
+data/

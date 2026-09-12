@@ -9,11 +9,9 @@ services:
     ports:
       # Loopback-only, same convention as rules-mcp/scryfall-mcp/searxng
       # below -- lets you hit the API (and its own zero-build dev test UI at
-      # `/`, see app_api/main.py's serve_index()) directly without webapp/
-      # or caddy at all, e.g. `docker compose up -d --build mtg-judge
-      # rules-mcp scryfall-mcp searxng`. Doesn't change the production
-      # Cloudflare Tunnel path -- that still only ever reaches this
-      # container through `caddy` on mtg-network, never this host port.
+      # `/`, see app_api/main.py's serve_index()) directly without `caddy`
+      # at all, e.g. `docker compose up -d --build mtg-judge rules-mcp
+      # scryfall-mcp searxng`.
       - "127.0.0.1:8000:8000"
     volumes:
       - ./server/project_config.yml:/app/project_config.yml:ro
@@ -75,10 +73,25 @@ services:
       - DAILY_QUOTA_AUTHENTICATED=${DAILY_QUOTA_AUTHENTICATED:-500}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # `condition: service_healthy`, not the bare list form: the bare form only
+    # waits for these containers to *start*, not for rules-mcp's HTTP server to
+    # actually be listening -- and rules-mcp's own main() runs its (possibly
+    # 8-10 minute, first-boot) ingestion to completion before it ever binds its
+    # port. Found live: mtg-judge raced ahead on a fresh volume, tried to load
+    # MCP tools from a rules-mcp that wasn't listening yet, and crash-looped
+    # (UnboundLocalError inside langchain-mcp-adapters, not a clean retry)
+    # until `restart: unless-stopped` happened to catch it after rules-mcp
+    # finally came up -- confusing tracebacks for several minutes on every
+    # fresh install, not just a cosmetic delay. depends_on's health-gating
+    # only works because rules-mcp's own healthcheck below can't pass until
+    # its HTTP server is actually accepting connections.
     depends_on:
-      - rules-mcp
-      - scryfall-mcp
-      - searxng
+      rules-mcp:
+        condition: service_healthy
+      scryfall-mcp:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
     networks:
       - mtg-network
     restart: unless-stopped
@@ -146,7 +159,18 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # server.py's main() runs ingestion to completion (docs: ~8-10 min for a
+      # full first-boot embed) BEFORE the HTTP server binds its port at all --
+      # every check fails with connection-refused until then, by design, not
+      # by malfunction. start_period this long means those expected failures
+      # never count toward `retries` (which would otherwise flip this
+      # container to "unhealthy" after ~2 minutes and leave mtg-judge's
+      # `condition: service_healthy` wait hanging on a dependency that looks
+      # permanently broken instead of just still starting). A container that
+      # actually is broken still surfaces correctly: `docker compose logs
+      # rules-mcp` shows a real crash instead of a boring wait, and `docker
+      # compose up` doesn't return control until mtg-judge is genuinely ready.
+      start_period: 20m
 
   scryfall-mcp:
     build: ./server/scryfall_mcp
@@ -193,313 +217,34 @@ services:
       retries: 3
       start_period: 15s
 
+  # Reverse proxy in front of mtg-judge: TLS termination + a real domain if
+  # you want one. Not built from anything project-specific -- a bare
+  # `caddy:2` image just proxying to mtg-judge, since mtg-judge already
+  # serves its own zero-build dev test UI at `/` (app_api/main.py's
+  # serve_index()) plus /chat*, /health, /metrics -- there's no separate
+  # static bundle to serve here, so no build step or frontend dependency at all.
+  # For pure loopback use, skip this and hit mtg-judge's own port mapping
+  # above directly.
   caddy:
-    build:
-      context: .
-      dockerfile: webapp/Dockerfile
-      args:
-        # Same-origin deploy (default): Caddy serves the built PWA and
-        # proxies /chat*, /health on the same domain, so the API base is
-        # relative. Override if the frontend is ever split onto a
-        # different origin than the backend.
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
+    image: caddy:2
     container_name: mtg-caddy
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      - mtg-judge
-    networks:
-      - mtg-network
-    restart: unless-stopped
-    healthcheck:
-      # /health is proxied straight through to mtg-judge, so this also
-      # confirms the backend behind Caddy is reachable, not just Caddy itself.
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-
-  # Opt-in, webapp-free alternative to `caddy` above: a bare `caddy:2`
-  # image (no build, no webapp/ dependency at all) that just reverse-proxies
-  # every path to mtg-judge -- which already serves its own zero-build dev
-  # test UI at `/` (app_api/main.py's serve_index()) plus /chat*, /health,
-  # /metrics, so there's no static bundle to serve here. For a real
-  # domain/TLS in front of a webapp-free deployment; for pure loopback use
-  # skip this too and hit mtg-judge's own port mapping above directly.
-  #
-  # Not started by a plain `docker-compose up --build` -- that keeps
-  # bringing up the default `caddy` (and building webapp/) unchanged, same
-  # as today. To actually avoid webapp/ entirely, name services explicitly
-  # rather than just activating this profile, since an unprofiled service
-  # like `caddy` still starts by default regardless of which profiles are
-  # active:
-  #   docker compose up -d --build mtg-judge rules-mcp scryfall-mcp searxng caddy-local
-  caddy-local:
-    image: caddy:2
-    container_name: mtg-caddy-local
-    volumes:
-      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
-      - caddy_local_data:/data
-      - caddy_local_config:/config
     ports:
-      # Loopback-only by default (unlike the main `caddy` service's open
-      # 80/443) since this is explicitly the local-use path -- override to
-      # 0.0.0.0 in a docker-compose.override.yml if you actually want this
-      # reachable off-host (e.g. fronting it with a real domain/TLS).
-      # 8877, not 8080/8090/8100/3000/etc. -- this host alone had unrelated
-      # containers already squatting on both of the more obvious choices
-      # (found live), the same class of conflict docs/PLAN.md's "Local
-      # deployment notes" already documents for other services in this
-      # file; remap again here in your own docker-compose.override.yml if
-      # 8877 also collides on your host.
+      # Loopback-only by default -- override to 0.0.0.0 in a
+      # docker-compose.override.yml if you want this reachable off-host
+      # (e.g. fronting it with a real domain/TLS). Remap the host side here
+      # if 8877 collides with something else already running on your host.
       - "127.0.0.1:8877:80"
     depends_on:
-      - mtg-judge
+      mtg-judge:
+        condition: service_healthy
     networks:
       - mtg-network
     restart: unless-stopped
-    profiles:
-      - local
-
-  # Opt-in: `docker-compose --profile monitoring up`. Prometheus scraping
-  # mtg-judge's and (when the `discord` profile is also active)
-  # discord-bot's /metrics endpoints, plus the SLO recording rules/alert in
-  # ops/monitoring/prometheus/rules/. See docs/OBSERVABILITY_PLAN_V2.md.
-  # No extra_hosts/host.docker.internal needed -- both scrape targets are
-  # reachable by Docker-internal DNS on mtg-network.
-  prometheus:
-    image: prom/prometheus:v2.50.0
-    container_name: mtg-prometheus
-    # Overrides the image's default CMD entirely, so every default flag
-    # needs to be re-listed, not just retention (confirmed via `docker
-    # inspect prom/prometheus:v2.50.0` before adding this). Retention
-    # matters here specifically: the image's own built-in default is 15d
-    # when --storage.tsdb.retention.time is omitted, but
-    # ops/monitoring/prometheus/rules/slo_rules.yml's
-    # job:http_availability:ratio_rate30d rule computes rate(...[30d]) --
-    # at 15d retention that range can never span more than 15 days of
-    # actual samples, so the "30-day" availability SLI would silently
-    # reflect a ~15-day window instead (half the ~3.6h/30-day error budget
-    # docs/OBSERVABILITY_PLAN_V2.md documents for this SLO). 31d, not 30d,
-    # for a one-day margin against the exact boundary.
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
-      - "--web.console.templates=/usr/share/prometheus/consoles"
-      - "--storage.tsdb.retention.time=31d"
-    volumes:
-      - ./ops/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./ops/monitoring/prometheus/rules:/etc/prometheus/rules:ro
-      - prometheus_data:/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
-    networks:
-      - mtg-network
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Opt-in: `docker-compose --profile tunnel up`. Connects this deployment to
-  # a Cloudflare Tunnel so it's reachable at your domain (e.g.
-  # azor.delta43.net) with TLS terminated at Cloudflare's edge -- no public
-  # port needs to be open on the host at all. Create the tunnel in the
-  # Cloudflare Zero Trust dashboard, point its public hostname at
-  # `http://localhost:80` (host networking, see below -- matches this
-  # deployment's other cloudflared tunnels), and put the tunnel's token in
-  # CLOUDFLARE_TUNNEL_TOKEN.
-  #
-  # Pinned by digest + host networking + pull_policy: always to match this
-  # host's other cloudflared tunnels (~/.docker_configs/cloudflared/compose.yml)
-  # -- one cloudflared version across every tunnel on the box. Unlike those,
-  # the token here is an env var, not inlined in the command: this file is
-  # published on GitHub, theirs isn't.
-  cloudflared:
-    image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
-    container_name: cf-oracle-tunnel
-    network_mode: host
-    pull_policy: always
-    # Not `:?`-required: compose interpolates every service's command/env at
-    # parse time regardless of active --profile flags (see the r2-backup
-    # service below), so a hard requirement here would break plain
-    # `docker-compose up` for everyone not using the tunnel profile.
-    # cloudflared fails fast with its own clear error if this is empty.
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    environment:
-      # Loopback-only, fixed port -- matches the same convention (and the
-      # same reasoning: network_mode: host would otherwise expose this on
-      # every interface) as ~/.docker_configs/cloudflared/compose.yml's
-      # tunnels, which already claim ports 20241-20245 on this host.
-      - TUNNEL_METRICS=127.0.0.1:20246
-    healthcheck:
-      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20246", "ready"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    depends_on:
-      - caddy
-    restart: unless-stopped
-    profiles:
-      - tunnel
-
-  # Opt-in: `docker-compose --profile backup up`. Periodically snapshots
-  # conversation memory + the rules ChromaDB index to Cloudflare R2 (an
-  # S3-compatible bucket) so state survives a VPS rebuild/redeploy. No-ops
-  # (logs and exits) if R2_* credentials aren't set -- see ops/README.md and
-  # ops/backup_to_r2.py. Builds from ops/ (its own small boto3-only image),
-  # not the main backend image -- this service has zero application imports.
-  r2-backup:
-    build: ./ops
-    container_name: mtg-r2-backup
-    volumes:
-      # Not `:ro` -- this same service definition is also used one-off via
-      # `docker compose run --rm r2-backup python restore_from_r2.py --yes`
-      # (see that script's docstring), which needs to write the restored
-      # SQLite DB and Chroma persist dir back into these paths. The standing
-      # `--profile backup` service (backup_to_r2.py) only ever reads from
-      # them, so the writable mount doesn't change its behavior.
-      - ./data/conversations:/app/data/conversations
-      - ./data/chroma:/app/data/chroma
-    environment:
-      # Not `:?`-required (see the `tunnel` service's comment above) --
-      # ops/backup_to_r2.py already no-ops with a clear log line if these
-      # are unset, which is the right place to enforce this, not compose-parse
-      # time.
-      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
-      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
-      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
-      - R2_BUCKET=${R2_BUCKET:-}
-      - R2_BACKUP_INTERVAL_SECONDS=${R2_BACKUP_INTERVAL_SECONDS:-3600}
-    networks:
-      - mtg-network
-    restart: unless-stopped
-    profiles:
-      - backup
-
-  # Opt-in: `docker-compose --profile discord up`. Deliberately points at the
-  # public API_BASE_URL (azor.delta43.net), not an internal service name --
-  # this bot is meant to work the same way whether it's colocated on this
-  # host or run elsewhere entirely, and shouldn't depend on Docker-internal
-  # DNS. For that reason it's also NOT attached to mtg-network -- it only
-  # ever needs outbound internet access to Discord's gateway and to the
-  # public API, same as any other client. See discord_client/README.md.
-  discord-bot:
-    build: ./discord_client
-    container_name: mtg-discord-bot
-    environment:
-      # Not `:?`-required (see the `tunnel` service's comment above) --
-      # compose interpolates every service's env at parse time regardless of
-      # active --profile flags, so a hard requirement here would break plain
-      # `docker-compose up` for everyone not using the discord profile.
-      # bot.py's own main() already fails fast with a clear error if this is
-      # empty when the container actually starts.
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
-      - API_BASE_URL=${DISCORD_API_BASE_URL:-https://azor.delta43.net}
-      # Dedicated key (not shared with anything else) so this bot's usage is
-      # tracked against its own daily quota -- see root CLAUDE.md/docs/TODO.md.
-      - API_KEY=${DISCORD_API_KEY:-}
-      - ALLOWED_GUILD_IDS=${DISCORD_ALLOWED_GUILD_IDS:-}
-      - ALLOWED_CHANNEL_IDS=${DISCORD_ALLOWED_CHANNEL_IDS:-}
-      - COOLDOWN_SECONDS=${DISCORD_COOLDOWN_SECONDS:-10}
-    restart: unless-stopped
-    healthcheck:
-      # No curl/wget in this image -- python3 is the only HTTP client
-      # available. Probes the Prometheus metrics server (see bot.py's
-      # start_http_server(port=9100)) as a liveness signal, since the bot
-      # itself has no other server to check.
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/metrics', timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    # Added for Prometheus scraping only (see ops/monitoring/prometheus/prometheus.yml)
-    # -- the bot's actual API calls still go to the public API_BASE_URL
-    # above, unchanged, so this doesn't reintroduce a Docker-DNS dependency
-    # for anything functional, only for metrics when colocated on this host.
-    # A deliberate, narrow exception to this service's "not on mtg-network"
-    # design (see root CLAUDE.md) -- see docs/OBSERVABILITY_PLAN_V2.md
-    # section 1.3/5 for the reasoning and the open question for whoever owns
-    # that original decision.
-    networks:
-      - mtg-network
-    profiles:
-      - discord
-
-  # Opt-in: `docker-compose --profile accounts up`. Scaffolding for the
-  # future accounts/tiers/billing pivot (see docs/PLAN.md, accounts_db/README.md)
-  # -- self-hosted Supabase, trimmed to just these two containers.
-  # Deliberately NOT running PostgREST/Realtime/Storage/Kong/Studio/
-  # analytics from the official bundle -- FastAPI talks to Postgres
-  # directly (accounts_db/) and verifies GoTrue-issued JWTs locally, so
-  # none of Supabase's REST/gateway layer is needed. Not added to
-  # `mtg-judge`'s `depends_on`, and nothing here is forwarded into
-  # `mtg-judge`'s environment yet -- that's Phase 1 work, once
-  # ACCOUNTS_MODE=hosted is something the backend actually branches on.
-  supabase-db:
-    image: supabase/postgres:17.6.1.136
-    container_name: mtg-supabase-db
-    environment:
-      # Not `:?`-required (see the `tunnel` service's comment above) --
-      # the image itself fails fast with its own clear error on an empty
-      # required value at container start, same reasoning as
-      # DISCORD_BOT_TOKEN/CLOUDFLARE_TUNNEL_TOKEN.
-      - POSTGRES_USER=${POSTGRES_USER:-}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
-      - POSTGRES_DB=${POSTGRES_DB:-}
-    volumes:
-      - supabase_db_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
-    networks:
-      - mtg-network
-    restart: unless-stopped
-    profiles:
-      - accounts
-
-  supabase-auth:
-    image: supabase/gotrue:v2.189.0
-    container_name: mtg-supabase-auth
-    environment:
-      - GOTRUE_API_HOST=0.0.0.0
-      - GOTRUE_API_PORT=9999
-      - GOTRUE_DB_DRIVER=postgres
-      - GOTRUE_DB_DATABASE_URL=${GOTRUE_DB_DATABASE_URL:-}
-      - GOTRUE_SITE_URL=${GOTRUE_SITE_URL:-https://azor.delta43.net}
-      - GOTRUE_JWT_SECRET=${GOTRUE_JWT_SECRET:-}
-      - GOTRUE_JWT_EXP=3600
-      - GOTRUE_DISABLE_SIGNUP=false
-      # OAuth-only login (no self-hosted password storage/reset flow) --
-      # see docs/PLAN.md's auth decision.
-      - GOTRUE_EXTERNAL_EMAIL_ENABLED=false
-      - GOTRUE_EXTERNAL_GOOGLE_ENABLED=${OAUTH_GOOGLE_CLIENT_ID:+true}
-      - GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID=${OAUTH_GOOGLE_CLIENT_ID:-}
-      - GOTRUE_EXTERNAL_GOOGLE_SECRET=${OAUTH_GOOGLE_CLIENT_SECRET:-}
-      - GOTRUE_EXTERNAL_DISCORD_ENABLED=${OAUTH_DISCORD_CLIENT_ID:+true}
-      - GOTRUE_EXTERNAL_DISCORD_CLIENT_ID=${OAUTH_DISCORD_CLIENT_ID:-}
-      - GOTRUE_EXTERNAL_DISCORD_SECRET=${OAUTH_DISCORD_CLIENT_SECRET:-}
-      - GOTRUE_EXTERNAL_GITHUB_ENABLED=${OAUTH_GITHUB_CLIENT_ID:+true}
-      - GOTRUE_EXTERNAL_GITHUB_CLIENT_ID=${OAUTH_GITHUB_CLIENT_ID:-}
-      - GOTRUE_EXTERNAL_GITHUB_SECRET=${OAUTH_GITHUB_CLIENT_SECRET:-}
-    ports:
-      - "127.0.0.1:9999:9999"
-    depends_on:
-      - supabase-db
-    networks:
-      - mtg-network
-    restart: unless-stopped
-    profiles:
-      - accounts
 
 volumes:
   caddy_data:
   caddy_config:
-  caddy_local_data:
-  caddy_local_config:
-  supabase_db_data:
-  prometheus_data:

@@ -48,8 +48,8 @@ server:
   cors_allowed_origins: ""
   # Comma-separated API keys for X-API-Key auth (empty = auth disabled, local dev).
   # A request with no X-API-Key header at all is still allowed through (the
-  # anonymous tier, e.g. the public PWA which can't keep a key secret) -- this
-  # list only validates keys that ARE presented.
+  # anonymous tier -- e.g. a browser-based client that can't keep a key
+  # secret) -- this list only validates keys that ARE presented.
   api_keys: ""
   rate_limit_per_minute: 20
   # Daily request quota, tiered by whether the caller presented a valid API key.

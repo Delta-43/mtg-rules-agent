@@ -180,7 +180,7 @@ class MTGRulesPDFParser:
         subrule_buffer: list[dict[str, str]] = []
 
         def flush_rule():
-            nonlocal current_rule_id, rule_text, subrule_buffer, current_section
+            nonlocal current_rule_id, rule_text, subrule_buffer
             if current_rule_id and current_section:
                 check_text = " ".join(rule_text).strip()
                 # Many rules are just a short title with no terminal punctuation
@@ -206,7 +206,7 @@ class MTGRulesPDFParser:
             subrule_buffer = []
 
         def flush_section():
-            nonlocal current_section, current_chapter
+            nonlocal current_section
             if current_section and current_chapter:
                 current_chapter["sections"].append(current_section)
             current_section = None

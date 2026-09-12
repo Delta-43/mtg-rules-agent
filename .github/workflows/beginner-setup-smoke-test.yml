@@ -106,15 +106,11 @@ jobs:
           # llama3.2:3b is Meta's next size up in the same family, with
           # meaningfully more reliable real-world tool-calling behavior at a
           # still-small ~2GB footprint -- well within a GitHub-hosted
-          # runner's 7GB RAM. (Not re-verified locally against this repo's
-          # real agent code before pushing this change: the dev host used for
-          # that earlier verification turned out to be memory-constrained --
-          # it's also running this project's live production stack -- and a
-          # background verification run of 3b was OOM-killed by the host
-          # itself. Continuing to run heavy local model tests there risked
-          # starving the real production containers of memory, so that
-          # approach was abandoned in favor of letting this workflow's own
-          # CI run, on a clean dedicated runner, be the real verification.)
+          # runner's 7GB RAM. This workflow's own CI run, on a clean
+          # dedicated runner, is the real verification for this tag -- a
+          # memory-constrained local dev host isn't a reliable place to
+          # background-verify a ~2GB model pull/run against everything else
+          # that might be running there.
           LLM_MODEL: llama3.2:3b
           EMBEDDING_MODEL: all-minilm
         run: ./setup.sh --non-interactive

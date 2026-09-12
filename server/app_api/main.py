@@ -35,40 +35,39 @@ INDEX_FILE: Path = STATIC_DIR / "index.html"
 
 
 def _client_ip(request: Request) -> str:
-    """Best-effort real client IP behind the Caddy + Cloudflare Tunnel proxy
-    chain this app is deployed behind in production.
+    """Best-effort real client IP behind a reverse proxy / tunnel chain.
 
     Without this, every anonymous request -- from every real visitor,
-    combined -- collapses to the same bucket: Caddy's own container IP on
-    `mtg-network`, since `get_remote_address()` just reads the raw ASGI
-    socket peer, which for any proxied request is always the last hop
-    (Caddy), never the actual visitor. That means the anonymous daily quota
-    and per-minute rate limit were, in practice, one shared pool across
-    every anonymous visitor at once rather than per-visitor as documented --
-    confirmed live: `172.25.0.2` (Caddy's bridge IP, per `docker network
-    inspect`) was the anonymous bucket key for every proxied request
-    regardless of which real IP made it.
+    combined -- collapses to the same bucket: the proxy's own container/host
+    IP, since `get_remote_address()` just reads the raw ASGI socket peer,
+    which for any proxied request is always the last hop (the proxy), never
+    the actual visitor. That means the anonymous daily quota and per-minute
+    rate limit would, in practice, become one shared pool across every
+    anonymous visitor at once rather than per-visitor as documented --
+    confirmed live on a deployment fronted by Caddy + a Cloudflare Tunnel:
+    the proxy's own bridge IP was the anonymous bucket key for every
+    proxied request regardless of which real IP made it.
 
     `CF-Connecting-IP` is set by Cloudflare's own edge on every request that
     passes through it, and Cloudflare overwrites any client-supplied value
     of this specific header at their edge -- so for traffic that genuinely
-    came through Cloudflare (the tunnel), it can be trusted. Caddy's
-    `reverse_proxy` doesn't strip or rewrite it, so it reaches this app
-    unmodified. Falls back to the first hop of `X-Forwarded-For` (which
-    Caddy appends its own hop onto, without discarding whatever Cloudflare/
-    cloudflared already set), then to the raw socket peer for requests that
-    never go through Caddy at all (host-run dev via `run_bot.sh`, or a
-    direct `docker run`/test client).
+    came through Cloudflare, it can be trusted, as long as your reverse
+    proxy's `reverse_proxy`/passthrough config doesn't strip or rewrite it.
+    Falls back to the first hop of `X-Forwarded-For`, then to the raw socket
+    peer for requests that never go through a proxy at all (host-run dev via
+    `run_bot.sh`, or a direct `docker run`/test client).
 
-    Residual trust caveat, not fixed here: this only holds if Caddy is
-    reachable *only* through Cloudflare. `docker-compose.yml`'s `caddy`
-    service also publishes 80/443 directly -- if that mapping is bound to a
-    public interface (not just loopback) and not blocked by a host firewall,
-    a client hitting Caddy that way bypasses Cloudflare's edge entirely and
-    could set an arbitrary `CF-Connecting-IP` themselves, since Caddy has no
-    special handling for this header. Confirm your firewall actually
-    restricts public access to whatever host port Caddy is bound to (check
-    `docker port mtg-caddy`) if you rely on the tunnel as the sole ingress.
+    Residual trust caveat, not fixed here: this only holds if the app is
+    reachable *only* through your trusted proxy/tunnel. If your public
+    reverse proxy also publishes a port on a public interface (not just
+    loopback) without a firewall blocking direct access, a client hitting it
+    that way bypasses your tunnel/edge entirely and could set an arbitrary
+    `CF-Connecting-IP` themselves, since a plain reverse proxy has no special
+    handling for this header. Confirm your own deployment actually restricts
+    public access to whatever port your proxy is bound to if you rely on a
+    tunnel/CDN edge as the sole ingress. If you're not fronting this with
+    Cloudflare specifically, adjust the header preference below to match
+    whatever your own proxy/tunnel sets.
     """
     cf_connecting_ip = request.headers.get("CF-Connecting-IP")
     if cf_connecting_ip:
@@ -143,7 +142,8 @@ instrumentator = Instrumentator(
     # unanchored "/" matches every handler string, since every FastAPI path
     # contains "/" ("/chat", "/chat/stream", ...), which would silently
     # exclude everything from instrumentation, not just root. See
-    # docs/OBSERVABILITY_PLAN_V2.md section 1.2.
+    # server/tests/test_metrics.py's anchored-regex test for the regression
+    # this guards against.
     excluded_handlers=["/metrics", "/health", "^/$"],
 )
 instrumentator.instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
@@ -166,12 +166,13 @@ judge_agent: MTGJudgeAgent | None = None
 
 
 def _authenticate(request: Request) -> bool:
-    """True if the request carries a valid API key (authenticated tier: e.g. the
-    Discord bot). False for keyless callers (anonymous tier: the public PWA,
-    which can't keep a client-side key secret) -- allowed through, not rejected,
-    but subject to a stricter daily quota. Only raises when a key IS present but
-    doesn't match -- a caller that tries and fails a key is rejected outright,
-    not silently downgraded to anonymous."""
+    """True if the request carries a valid API key (authenticated tier: e.g. a
+    server-side bot or backend integration). False for keyless callers
+    (anonymous tier: e.g. a browser-based client, which can't keep a
+    client-side key secret) -- allowed through, not rejected, but subject to
+    a stricter daily quota. Only raises when a key IS present but doesn't
+    match -- a caller that tries and fails a key is rejected outright, not
+    silently downgraded to anonymous."""
     api_key = request.headers.get("X-API-Key")
     if api_key is None:
         return False
@@ -218,8 +219,8 @@ async def serve_index() -> FileResponse:
 
     Serving this lightweight single-page interface directly from FastAPI eliminates external CDN
     dependencies, avoids separate build pipelines, and allows manual testing in both host and
-    containerized deployment environments. This is a developer tool, not the public frontend --
-    see `webapp/` for the deployed PWA.
+    containerized deployment environments. This is a developer tool, not a production frontend --
+    build your own client against `/chat`/`/chat/stream` for real end-user access.
     """
     if not INDEX_FILE.is_file():
         raise HTTPException(status_code=404, detail="Frontend test UI not found")

@@ -9,10 +9,11 @@ from fastapi import Request
 
 def _fake_request(headers: dict[str, str]) -> Request:
     """Builds a minimal real Request with a raw socket peer of 172.25.0.2
-    (Caddy's actual bridge IP in production, per `docker network inspect` --
-    see _client_ip's docstring) so a test that forgets to set any of the
-    proxy headers exercises the exact same fallback path production hits for
-    non-proxied requests, not an arbitrary placeholder.
+    (a real reverse proxy's bridge IP in a Docker Compose deployment, per
+    `docker network inspect` -- see _client_ip's docstring) so a test that
+    forgets to set any of the proxy headers exercises the exact same
+    fallback path a real proxied deployment hits for non-proxied requests,
+    not an arbitrary placeholder.
     """
     scope = {
         "type": "http",
@@ -43,16 +44,17 @@ def client() -> TestClient:
 
 
 def test_anonymous_requests_bucket_by_real_client_ip_not_by_proxy_ip(client: TestClient) -> None:
-    """Regression test for a real bug found live: every anonymous request
-    proxied through Caddy has the same raw socket peer (Caddy's own bridge
-    IP), so before _client_ip existed, every anonymous visitor -- combined --
-    shared one single rate-limit/quota bucket instead of one bucket each.
-    Confirmed live in production: 172.25.0.2 (Caddy's bridge IP) was the
-    bucket key for every proxied request regardless of the real visitor's IP.
+    """Regression test for a real bug found in an early deployment: every
+    anonymous request proxied through a reverse proxy has the same raw
+    socket peer (the proxy's own bridge IP), so before _client_ip existed,
+    every anonymous visitor -- combined -- shared one single rate-limit/quota
+    bucket instead of one bucket each. Confirmed against a real Docker
+    Compose deployment: 172.25.0.2 (the proxy's bridge IP) was the bucket
+    key for every proxied request regardless of the real visitor's IP.
 
-    Sends two requests carrying different CF-Connecting-IP headers (as Caddy
-    would forward from Cloudflare's edge) and asserts they land in two
-    separate usage_counters rows, not one shared row.
+    Sends two requests carrying different CF-Connecting-IP headers (as a
+    reverse proxy would forward from Cloudflare's edge) and asserts they
+    land in two separate usage_counters rows, not one shared row.
     """
     client.post("/chat", json={"query": ""}, headers={"CF-Connecting-IP": "203.0.113.10"})
     client.post("/chat", json={"query": ""}, headers={"CF-Connecting-IP": "203.0.113.20"})
