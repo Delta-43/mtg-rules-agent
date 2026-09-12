@@ -9,18 +9,37 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/Delta-43/mtg-rules-agent/commits/main"><img src="https://img.shields.io/github/last-commit/Delta-43/mtg-rules-agent" alt="Last commit"></a>
+  <a href="https://github.com/Delta-43/mtg-rules-agent/graphs/contributors"><img src="https://img.shields.io/github/contributors-anon/Delta-43/mtg-rules-agent?color=yellow" alt="Contributors"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Delta-43/mtg-rules-agent/actions/workflows/server-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg-rules-agent/server-ci.yml?branch=main&label=server" alt="server CI"></a>
+  <a href="https://github.com/Delta-43/mtg-rules-agent/actions/workflows/scryfall-mcp-ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg-rules-agent/scryfall-mcp-ci.yml?branch=main&label=scryfall-mcp" alt="scryfall-mcp CI"></a>
+  <a href="https://github.com/Delta-43/mtg-rules-agent/actions/workflows/compose-validate.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg-rules-agent/compose-validate.yml?branch=main&label=package" alt="package CI"></a>
+  <a href="https://github.com/Delta-43/mtg-rules-agent/actions/workflows/beginner-setup-smoke-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/Delta-43/mtg-rules-agent/beginner-setup-smoke-test.yml?branch=main&label=setup" alt="setup smoke test"></a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
-  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.8">
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose">
 </p>
 
 <p align="center">
   <a href="#-what-it-does">What it does</a> •
   <a href="#-architecture">Architecture</a> •
+  <a href="#-project-status">Project Status</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-tech-stack">Tech Stack</a> •
   <a href="#-documentation">Documentation</a>
 </p>
+
+> [!TIP]
+> This repo ships no frontend — build your own client (web, Discord,
+> Telegram, CLI, whatever) against `/chat`/`/chat/stream`, or start with
+> [`scripts/chat_cli.py`](scripts/chat_cli.py) to try it from a terminal
+> first.
 
 ---
 
@@ -72,10 +91,17 @@ Every box above is a real, independently-runnable module —
 [Project Structure](#-project-structure) and
 [`docs/DESCRIPTION.md`](docs/DESCRIPTION.md) for the full picture.
 
+## 📊 Project Status
+
+The agent, both MCP servers, and tiered auth/rate-limiting have all been
+verified end-to-end against a real running deployment — see
+[`server/STATUS.md`](server/STATUS.md) for the full current-status
+breakdown (what's live, what's still scaffolding, what's left).
+
 ## 🚀 Quick Start
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/Delta-43/mtg-rules-agent.git
 cd mtg-rules-agent
 ./setup.sh      # interactive: pick chat/embedding provider, deployment shape
 ./run_bot.sh    # (dev-only shape) docker compose up rules-mcp/scryfall-mcp/searxng, then host uvicorn
@@ -131,6 +157,14 @@ and the complete API reference, see
 </td>
 </tr>
 <tr>
+<td><strong>Card Data Service</strong></td>
+<td>
+<img src="https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white" alt="Node.js 20">
+<img src="https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.8">
+<img src="https://img.shields.io/badge/Vitest-6E9F18?logo=vitest&logoColor=white" alt="Vitest">
+</td>
+</tr>
+<tr>
 <td><strong>Data Sources</strong></td>
 <td>
 <img src="https://img.shields.io/badge/Scryfall%20API-000000" alt="Scryfall API">
@@ -181,3 +215,15 @@ Start with [`server/README.md`](server/README.md), then
 ## 📄 License
 
 [GNU AGPL v3.0](LICENSE)
+
+---
+
+<p align="center">
+  <a href="https://github.com/Delta-43/mtg-rules-agent/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=Delta-43/mtg-rules-agent" alt="Contributors">
+  </a>
+</p>
+
+<p align="center">
+  <sub>Licensed under <a href="LICENSE">GNU AGPL v3.0</a>.</sub>
+</p>
